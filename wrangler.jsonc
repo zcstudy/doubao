@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "doubao",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-09-29",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-chat-db",
+      "database_id": "a31daef2-f1aa-4be2-a0af-9e577cfabd63",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

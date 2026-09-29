@@ -1,0 +1,5 @@
+# 本地开发用；复制成 .dev.vars 后填真实值。.dev.vars 已被 .gitignore 排除。
+# 线上用 `wrangler pages secret put <NAME> --project-name doubao` 写入，绝不写进 wrangler.jsonc。
+ACCESS_PASSWORD=change-me-local-only
+TOKEN_SECRET=local-dev-secret-please-replace
+ACCOUNT_OWNER=owner
