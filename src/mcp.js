@@ -81,9 +81,19 @@ export function toOpenAiTools(tools) {
     function: {
       name: t.name,
       description: t.description || '',
-      parameters: t.inputSchema || { type: 'object', properties: {} },
+      parameters: leanSchema(t.inputSchema || { type: 'object', properties: {} }),
     },
   }));
+}
+
+// 有些服务把整篇示例文档塞进 default（ModelScope 的 pandoc 工具光默认值就 2KB），
+// 模型用不到默认值，每轮请求白烧输入
+function leanSchema(v) {
+  if (Array.isArray(v)) return v.map(leanSchema);
+  if (!v || typeof v !== 'object') return v;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) if (k !== 'default') out[k] = leanSchema(x);
+  return out;
 }
 
 export async function callTool(server, name, args) {

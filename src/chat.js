@@ -16,7 +16,7 @@ const SEARCH_PROMPT =
 const HISTORY_CAP = 60;          // 粗略防超长：M1 先按条数截，M2 再按 token 预算
 const MAX_TOOL_ROUNDS = 5;
 // 一次对话里最多加载几个 MCP 服务的工具，超出的会点名提示
-const MAX_MCP_SERVERS = 5;
+const MAX_MCP_SERVERS = 8;
 // Tavily 一次返回 17KB 左右，原样回喂会挤掉上下文，留个预算
 const TOOL_RESULT_CAP = 6000;
 // dev Key 的速率限制按秒计，同轮连发必撞，退避一次基本能过

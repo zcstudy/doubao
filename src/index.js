@@ -15,6 +15,7 @@ import {
 } from './mcp-servers.js';
 import { handleGetSettings, handlePutSettings } from './settings.js';
 import { handleSaveNote } from './notes.js';
+import { handleExportDoc } from './export.js';
 
 const DAY = 86_400_000;
 
@@ -68,6 +69,7 @@ export default {
     }
 
     if (m === 'POST' && resource === 'note' && !id) return handleSaveNote(request, env, userId);
+    if (m === 'POST' && resource === 'export' && !id) return handleExportDoc(request, env, userId);
 
     return json({ error: 'not found' }, 404);
   },

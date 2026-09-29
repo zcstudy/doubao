@@ -11,6 +11,7 @@
 - **多模态**：粘贴 / 拖拽 / 选图，一次最多 4 张；前端压到长边 1280 的 JPEG 再上传，追问时自动带上上一轮的图
 - **联网搜索**：MCP 客户端，可挂多个远程 MCP 服务，模型自主决定调用，工具卡片显示参数、状态和来源链接
 - **收藏到笔记**：每条回答一键推送到笔记 MCP 的收件箱，带来源和模型信息
+- **导出 Word / PDF**：每条回答一键转文档，正文走 Pandoc 类 MCP 服务转换；文件字节由服务端带令牌取回再以附件下发，浏览器只拿文件、拿不到令牌
 - **朗读**：Edge 在线 TTS（浏览器直连），非 Edge 内核自动退回系统 `speechSynthesis`
 - **会话管理**：重命名 / 删除 / 编辑重发 / 重新生成 / 导出 Markdown 与 JSON，刷新后工具卡片与思考过程照样还原
 - **应用名可自定义**，深浅色跟随系统，移动端自适应
@@ -44,6 +45,7 @@ npx wrangler d1 execute ai-chat-db --remote --file=migrations/0003_settings.sql
 
 npx wrangler pages secret put ACCESS_PASSWORD --project-name doubao   # 访问口令
 npx wrangler pages secret put TOKEN_SECRET   --project-name doubao    # token 签名密钥，随机长字符串
+npx wrangler pages secret put MODELSCOPE_TOKEN --project-name doubao  # 可选：导出 Word/PDF 用，魔搭 SDK 令牌 ms-xxxx
 npx wrangler pages project create doubao --production-branch main
 
 npm run build && npx wrangler pages deploy dist --project-name doubao
@@ -58,12 +60,13 @@ npm run build && npx wrangler pages deploy dist --project-name doubao
 ```text
 src/index.js        路由与鉴权
 src/chat.js         /api/chat：SSE 事件流、工具循环、落盘
-src/mcp.js          远程 MCP 客户端（initialize / tools/list / tools/call + 工具缓存）
+src/mcp.js          远程 MCP 客户端（initialize / tools/list / tools/call + 工具缓存 + schema 瘦身）
 src/db.js           D1 访问层：所有查询都带 user_id 且命中索引，id 一律 bind
 src/providers.js    供应商 CRUD（Key 只写不读，返回 sk-…last4）
 src/mcp-servers.js  MCP 服务 CRUD / 开关 / 连通测试
 src/conversations.js会话、消息、回退
 src/notes.js        收藏到笔记（找带 add_note 工具的 MCP 去调）
+src/export.js       导出 Word/PDF（调 markdown 转文档的 MCP，再带令牌把文件取回来）
 src/settings.js     应用级设置（目前只有名称）
 src/auth.js         口令校验与 HMAC token
 src/sanitize.js     出站地址校验（挡内网 / 元数据地址）
@@ -79,6 +82,8 @@ public/index.html   整个前端
 - **D1 免费额度按行读写计**：所以组装上下文的查询故意不 `select images / meta`，历史图片一条就几百 KB
 - **Edge TTS 的 `Sec-MS-GEC` 校验的是 `User-Agent`**，Workers 不能自定义 WS 请求头，只能在浏览器里直连
 - **`*.pages.dev` 的短名全局唯一**：撞名时 Cloudflare 静默加后缀（本项目 `doubao` → `doubao-5jj`）
+- **ModelScope Studio 的 `*.ms.show` 域名拒绝匿名与 SDK 直连**（整站 403），生成的文件要改写成同名的 `studio-*.api-inference.modelscope.net` 并带上 `Authorization: Bearer $MODELSCOPE_TOKEN` 才取回来
+- **MCP 的 `inputSchema` 会把整篇示例塞进 `default`**（有个转换工具光默认值就 2KB），喂给模型前必须剥掉，否则每轮都白烧输入 token
 
 ## 许可
 

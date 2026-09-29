@@ -44,7 +44,7 @@ textarea,input,select{font:inherit;color:inherit}
 .conv:hover{background:var(--panel-2)}
 .conv.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .conv .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
-.conv .x{opacity:0;padding:0 5px;font-size:15px;line-height:1;color:var(--muted)}
+.conv .x{opacity:.5;padding:0 5px;font-size:15px;line-height:1;color:var(--muted)}
 .conv:hover .x{opacity:1}
 .conv .x:hover{color:var(--danger)}
 .sbar-ft{border-top:1px solid var(--border);padding:8px;display:flex;gap:6px;flex-wrap:wrap}
@@ -97,6 +97,8 @@ textarea,input,select{font:inherit;color:inherit}
   border-radius:8px;background:var(--accent);color:#fff;font-size:9px;line-height:14px;text-align:center;display:none}
 .acts button.note.saved .bdg{display:block}
 .acts button.note.saved{color:var(--accent)}
+.acts .docMenu{display:flex;gap:3px;padding:2px;border-radius:9px;background:var(--panel-2);border:1px solid var(--border)}
+.acts .docMenu button{padding:3px 8px;border-radius:7px}
 .editbox{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--accent);background:var(--bg);resize:vertical}
 
 /* markdown */
@@ -268,6 +270,7 @@ label.f input,label.f select{width:100%;padding:9px 11px;border-radius:10px;bord
     <button class="icon-btn" id="menuBtn">☰</button>
     <div id="convTitle">新对话</div>
     <div class="modelchip" id="who">未配置供应商</div>
+    <button class="icon-btn" id="delConvBtn" title="删除当前会话">🗑</button>
     <div class="menu-wrap">
       <button class="icon-btn" id="exportBtn" title="导出">⇩</button>
       <div class="pop" id="exportPop">
@@ -382,7 +385,10 @@ function applyName(n) {
   $('#brandName').textContent = S.name;
   $('#gateName').textContent = S.name;
   $('#input').placeholder = `发消息给 ${S.name}…（Enter 发送 / Shift+Enter 换行，可粘贴或拖入图片）`;
+  // 头像跟着名字走，改名后已经渲染出来的那些也要重画
+  document.querySelectorAll('.avatar').forEach((a) => { a.textContent = nameChar(); });
 }
+function nameChar() { return Array.from(appName().trim())[0] || 'A'; }
 applyName(S.name);
 
 // ——— 基础设施 ——————————————————————————————
@@ -639,7 +645,7 @@ function editUser(col, m) {
 function aiNode(m) {
   const el = document.createElement('div');
   el.className = 'msg ai';
-  const av = document.createElement('div'); av.className = 'avatar'; av.textContent = '豆';
+  const av = document.createElement('div'); av.className = 'avatar'; av.textContent = nameChar();
   const col = document.createElement('div'); col.className = 'col';
   el.append(av, col);
   el._refs = { col, m };
@@ -669,6 +675,7 @@ function paintActs(acts, m) {
   acts.innerHTML = `<button data-a="copy">⧉ 复制</button><button data-a="speak">🔊 朗读</button>
     <button data-a="regen">⟳ 重新生成</button>
     <button data-a="note" class="note${saved ? ' saved' : ''}" title="存进笔记收件箱">🔖 ${saved ? '已收藏' : '收藏'}<i class="bdg">✓</i></button>
+    <button data-a="doc" title="导出为 Word / PDF">📄 导出</button>
     <span class="tag">${fmtTime(m.created_at)}</span>`;
   if (TTS.playing === m.id) acts.querySelector('[data-a=speak]').classList.add('on');
   acts.onclick = async (e) => {
@@ -678,7 +685,54 @@ function paintActs(acts, m) {
     else if (a === 'speak') speakMessage(m, btn);
     else if (a === 'regen') regen(m);
     else if (a === 'note') await saveNote(m, btn);
+    else if (a === 'doc') toggleDocMenu(btn, m);
   };
+}
+// 导出菜单就地展开，选完即收，省一层弹窗状态
+function toggleDocMenu(btn, m) {
+  const acts = btn.closest('.acts');
+  const old = acts.querySelector('.docMenu');
+  if (old) return old.remove();
+  const menu = document.createElement('span');
+  menu.className = 'docMenu';
+  menu.innerHTML = '<button data-f="DOCX">Word</button><button data-f="PDF">PDF</button>';
+  menu.onclick = async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    menu.remove();
+    await exportDoc(m, b.dataset.f, btn);
+  };
+  acts.insertBefore(menu, btn.nextSibling);
+}
+// 文件字节由服务端取回后再吐给浏览器：转换服务给的直链匿名访问是 403，前端点不开
+async function exportDoc(m, format, btn) {
+  if (!m.id || !S.convId) return toast('这条还没存进会话，先等回答结束');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '生成中…';
+  try {
+    const res = await fetch('/api/export', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + S.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ conversationId: S.convId, messageId: m.id, format }),
+    });
+    if (res.status === 401) { signOut(); throw new Error('会话已过期，请重新登录'); }
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || `导出失败（${res.status}）`);
+    }
+    const raw = (res.headers.get('content-disposition') || '').match(/filename\*=UTF-8''([^;]+)/);
+    const blob = await res.blob();
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = raw ? decodeURIComponent(raw[1]) : `AI回答.${format.toLowerCase()}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 60_000);
+    toast('已导出 ' + a.download);
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
 }
 // 一键收藏走服务端：笔记 MCP 的 Key 只在 D1 里，浏览器拿不到也不该拿到
 async function saveNote(m, btn) {
@@ -1174,6 +1228,18 @@ $('#lightbox').onclick = () => $('#lightbox').classList.remove('on');
 $('#exportBtn').onclick = (e) => { e.stopPropagation(); $('#exportPop').classList.toggle('on'); };
 document.addEventListener('click', () => $('#exportPop').classList.remove('on'));
 $('#exportPop').onclick = (e) => { if (e.target.dataset.x) exportConv(e.target.dataset.x); };
+// 侧栏的 × 只在 hover 时露出来，手机上根本找不到，所以顶栏也给一个删除入口
+$('#delConvBtn').onclick = async () => {
+  if (!S.convId) return toast('现在还没打开会话，没有可删的');
+  const title = S.convTitle || '对话';
+  if (!confirm(`删除「${title}」及其全部消息？`)) return;
+  try {
+    await api(`conversations/${S.convId}`, { method: 'DELETE' });
+    newChat();
+    await loadConvs();
+    toast('已删除该会话');
+  } catch (e) { toast(e.message); }
+};
 function exportConv(kind) {
   if (!S.msgs.length) return toast('这个会话还没有内容');
   const title = S.convTitle || '对话';
