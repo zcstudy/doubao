@@ -1,7 +1,7 @@
 import { json } from './util.js';
 import {
-  getConversation, getMessage, prevUserMessage, updateMessage,
-  getEnabledMcpServers,
+  getConversation, getMessage, updateMessage,
+  getEnabledMcpServers, getEnabledProvider,
 } from './db.js';
 import { listTools, callTool } from './mcp.js';
 import { readSettings } from './settings.js';
@@ -25,19 +25,23 @@ export async function handleSaveNote(request, env, userId) {
 
   const answer = (msg.content || '').trim();
   if (!answer) return json({ error: '这条消息没有正文' }, 400);
+  if (msg.role !== 'assistant') return json({ error: '只能收藏模型的回答' }, 400);
 
   const found = await findNoteServer(env, userId);
   if (!found) {
     return json({ error: `没找到带 ${NOTE_TOOL} 工具的 MCP：先在设置里添加笔记服务并启用` }, 400);
   }
 
-  const asked = (await prevUserMessage(env.DB, conversationId, messageId)) || conv.title;
   const settings = await readSettings(env.DB, userId);
-  const note = buildNote({ asked, answer, msg, conv, sources: toolSources(msg.meta) });
+  // 笔记服务要求 title / tags 由调用方提炼，所以先让模型自己拟，拟不出来才兜底
+  const { out: draft, why } = await draftMeta(env, userId, answer);
+  const title = draft.title || fallbackTitle(answer);
+  const tags = draft.tags || 'AI对话,收藏';
 
   try {
+    // 正文只存模型输出原文，一字不改，也不拼用户提问
     const r = await callTool(found.server, NOTE_TOOL, {
-      title: note.title, tags: note.tags, content: note.content, agent: settings.appName,
+      title, tags, content: answer.slice(0, 20_000), agent: settings.appName,
     });
     // 笔记服务把业务错误包在正常返回里（和 Tavily 一个毛病），得看文本判断
     const fail = /^(错误|error)/i.test((r.text || '').trim());
@@ -47,26 +51,80 @@ export async function handleSaveNote(request, env, userId) {
   }
 
   const meta = parseMeta(msg.meta);
-  meta.note = { title: note.title, at: Date.now() };
+  meta.note = { title, tags, at: Date.now() };
   await updateMessage(env.DB, messageId, {
     content: msg.content, status: msg.status, meta: JSON.stringify(meta),
   });
 
-  return json({ ok: true, title: note.title });
+  return json({ ok: true, title, tags, drafted: Boolean(draft.title), draftWhy: why });
 }
 
-// 一键收藏没有模型参与，标题取本轮提问、标签固定，正文把问答和来源拼全
-function buildNote({ asked, answer, msg, conv, sources }) {
-  const head = `问：${asked}\n\n${answer}`;
-  const foot = [
-    sources?.length ? `\n\n参考来源：\n${sources.map((s) => `- ${s.title || s.url} ${s.url}`).join('\n')}` : '',
-    `\n\n—— 来自 ${conv.model || '未知模型'} 的回答 · ${new Date(msg.created_at).toLocaleString('zh-CN')}`,
-  ].join('');
-  return {
-    title: clip(asked, 28) || 'AI 回答收藏',
-    tags: 'AI对话,收藏',
-    content: (head + foot).slice(0, 20_000),
-  };
+const DRAFT_PROMPT =
+  '你在为一条笔记提炼标题和标签。只输出一个 JSON 对象，不要解释、不要代码围栏。\n' +
+  '格式：{"title":"…","tags":"词1,词2,词3"}\n' +
+  'title：8–20 个字的名词短语，概括这条回答真正讲的是什么；不要出现日期、时间或「速记」「笔记」「总结」「AI 回答」这类占位词。\n' +
+  'tags：3–6 个主题词，英文逗号分隔，词与词之间不要空格。';
+
+// 提炼失败（没启用供应商、超时、返回不合法）不阻断收藏，走兜底标题
+// why 只带状态码和截断后的原始文本，用于定位「拟不出来」的原因，不含密钥
+async function draftMeta(env, userId, answer) {
+  const provider = await getEnabledProvider(env.DB, userId);
+  if (!provider) return { out: {}, why: 'no-provider' };
+  let res;
+  try {
+    res = await fetch(`${provider.base_url.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${provider.api_key}`,
+        'content-type': 'application/json',
+        ...parseJson(provider.extra_headers, {}),
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        stream: false,
+        max_tokens: 600,
+        messages: [
+          { role: 'system', content: DRAFT_PROMPT },
+          { role: 'user', content: answer.slice(0, 1500) },
+        ],
+      }),
+      signal: AbortSignal.timeout(40_000),
+    });
+  } catch (e) {
+    return { out: {}, why: `fetch:${e?.name || e?.message || e}` };
+  }
+  // why 只带状态码和模型自己写的原文，不回传上游错误体，免得把第三方信息透到浏览器
+  if (!res.ok) return { out: {}, why: `http:${res.status}` };
+  const j = await res.json().catch(() => null);
+  const msg = j?.choices?.[0]?.message;
+  const text = (msg?.content || msg?.reasoning_content || '');
+  if (!text) return { out: {}, why: 'empty' };
+  const out = sanitizeDraft(text);
+  return { out, why: out.title ? 'ok' : `rejected:${text.slice(0, 120)}` };
+}
+
+function sanitizeDraft(text) {
+  const m = (text || '').replace(/```/g, '').match(/\{[\s\S]*\}/);
+  const j = m ? parseJson(m[0]) : null;
+  const out = {};
+  const title = typeof j?.title === 'string' ? j.title.replace(/\s+/g, ' ').trim() : '';
+  // 服务侧要求 ≤30 字，提示词要 8–20；越界的直接判给兜底，别把半截话存进笔记
+  if (title.length >= 5 && title.length <= 30 && !/\d{1,2}月|\d{1,2}:\d{2}|速记|笔记|总结/.test(title)) out.title = title;
+  const tags = typeof j?.tags === 'string' ? j.tags : (Array.isArray(j?.tags) ? j.tags.join(',') : '');
+  const list = tags.split(/[,，、]/).map((s) => s.trim()).filter(Boolean).slice(0, 6);
+  if (list.length >= 3) out.tags = list.join(',');
+  return out;
+}
+
+// 兜底标题：取正文第一行有实义的文字，去掉 Markdown 记号
+function fallbackTitle(answer) {
+  const line = answer.split('\n')
+    .map((s) => s.replace(/^[#>\-*\s]+/, '').replace(/[*_`]/g, '').trim())
+    .find((s) => s.length >= 6) || 'AI 回答收藏';
+  if (line.length <= 30) return line;
+  const cut = line.slice(0, 30);
+  // 英文词从中间截断很难看，退到最后一个完整词
+  return cut.replace(/\s+\S*$/, '').trim() || cut.trim();
 }
 
 async function findNoteServer(env, userId) {
@@ -90,20 +148,8 @@ function rank(s) {
   return /biji|note|笔记/i.test(`${s.name} ${s.url}`) ? 2 : 0;
 }
 
-// 回答里的来源存在那条消息的 meta.tools 里，笔记带上才可追溯
-function toolSources(metaText) {
-  const out = [];
-  for (const t of parseMeta(metaText).tools ?? []) {
-    for (const s of t.sources ?? []) if (s?.url) out.push(s);
-  }
-  return out.slice(0, 8);
-}
-
 function parseMeta(s) {
   try { return s ? JSON.parse(s) : {}; } catch { return {}; }
 }
 
-function clip(s, n) {
-  const t = (s || '').replace(/\s+/g, ' ').trim();
-  return t.length > n ? t.slice(0, n) : t;
-}
+function parseJson(s, d) { try { return typeof s === 'string' ? JSON.parse(s) : (s ?? d); } catch { return d; } }

@@ -40,6 +40,17 @@ textarea,input,select{font:inherit;color:inherit}
          font-weight:600;box-shadow:var(--shadow);display:flex;align-items:center;justify-content:center;gap:6px}
 .btn-new:hover{filter:brightness(1.05)}
 #convList{flex:1;overflow-y:auto;padding:0 8px 8px}
+.search{margin:10px 8px 4px;padding:8px 11px;border-radius:10px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px}
+.search:focus{outline:none;border-color:var(--accent)}
+.hit{padding:8px 10px;border-radius:10px;cursor:pointer;color:var(--muted);font-size:12px;line-height:1.5}
+.hit:hover{background:var(--panel-2)}
+.hit b{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
+.hit mark{background:var(--accent-soft);color:var(--accent);border-radius:3px;padding:0 2px}
+#moreBar{margin:2px 8px 6px;text-align:center}
+#moreBar button{font-size:12px;padding:5px 12px;border-radius:9px;color:var(--muted);background:var(--panel-2)}
+.sect+.hint{text-align:left;line-height:1.6;margin:-2px 0 9px}
+@keyframes flash{0%,60%{background:var(--accent-soft)}100%{background:transparent}}
+.msg.flash{animation:flash 1.8s ease-out;border-radius:14px}
 .conv{display:flex;align-items:center;gap:6px;padding:9px 10px;border-radius:10px;margin-bottom:2px;cursor:pointer;color:var(--text)}
 .conv:hover{background:var(--panel-2)}
 .conv.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
@@ -258,6 +269,7 @@ label.f input,label.f select{width:100%;padding:9px 11px;border-radius:10px;bord
     <button class="icon-btn" id="closeSide" title="收起">«</button>
   </div>
   <button class="btn-new" id="newBtn">＋ 新建对话</button>
+  <input id="searchBox" class="search" placeholder="🔍 搜索本地聊天记录" autocomplete="off">
   <div id="convList"></div>
   <div class="sbar-ft">
     <button id="themeBtn">◐ 深浅色</button>
@@ -343,6 +355,10 @@ label.f input,label.f select{width:100%;padding:9px 11px;border-radius:10px;bord
       <input id="setName" maxlength="24" placeholder="doubao"></label>
     <button class="primary" id="saveName">保存名称</button>
 
+    <div class="sect">数据</div>
+    <p class="hint">服务端只保留最近 10 天的聊天记录，超期自动删除；本机 IndexedDB 缓存不受这个限制，侧栏搜索框搜的就是它。</p>
+    <button class="ghost" id="clearAll">🗑 清空全部聊天记录</button>
+
     <div class="sect">账号</div>
     <button class="ghost" id="logout">退出登录</button>
   </div>
@@ -409,6 +425,80 @@ function signOut() {
   S.token = ''; S.convId = null; localStorage.removeItem('db.tok');
   $('#gate').classList.remove('hide');
 }
+
+// ——— 本地缓存（IndexedDB）—————————————————————————
+// 服务端仍是数据的真源，这里只是首屏缓存：点开会话先画本地，再拉服务端校准。
+// 缓存不可用（无痕、配额满、版本被占）时全部静默降级，绝不挡住正常聊天。
+// 库名带上账号 sub：令牌格式是 `payload.sig`，解第一段并补齐 base64url 的填充符
+function cacheDbName() {
+  const raw = (S.token || '').split('.')[0];
+  if (!raw) return 'doubao-cache-anon';
+  const pad = raw.replace(/-/g, '+').replace(/_/g, '/');
+  try {
+    const sub = JSON.parse(atob(pad + '='.repeat((4 - (pad.length % 4)) % 4))).sub;
+    return 'doubao-cache-' + (typeof sub === 'string' && sub ? sub : 'anon');
+  } catch { return 'doubao-cache-anon'; }
+}
+function idbTx(stores, mode, fn) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const req = indexedDB.open(cacheDbName(), 1);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains('convs')) d.createObjectStore('convs', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('msgs')) {
+        const s = d.createObjectStore('msgs', { keyPath: 'id' });
+        s.createIndex('by_conv', 'conversation_id');
+      }
+    };
+    req.onerror = () => done(null);
+    req.onblocked = () => done(null);
+    req.onsuccess = () => {
+      const d = req.result;
+      try {
+        const t = d.transaction(stores, mode);
+        // 多个 store 时按参数逐个传进来（不是数组），少一层下标少一个坑
+        const args = stores.map((s) => t.objectStore(s));
+        const out = fn(...args);
+        t.oncomplete = () => { d.close(); done(out && out.result !== undefined ? out.result : out); };
+        t.onerror = () => { d.close(); done(null); };
+        t.onabort = () => { d.close(); done(null); };
+      } catch { d.close(); done(null); }
+    };
+  });
+}
+// 会话表只 put 不 clear：服务端 10 天一清，本地还得留着名字，不然过期会话的命中只能显示「对话」
+const cacheConvs = (rows) => idbTx(['convs'], 'readwrite', (s) => rows.forEach((r) => r?.id && s.put(r)));
+const cacheMsgs = (convId, rows) => idbTx(['msgs'], 'readwrite', (s) => {
+  rows.forEach((m) => m?.id && !String(m.id).startsWith('tmp_') && s.put({ ...m, conversation_id: convId }));
+});
+const cachedConvs = () => idbTx(['convs'], 'readonly', (s) => s.getAll()) ?? [];
+// get() 没命中时 result 是 undefined，idbTx 会把请求对象本身返回出来，这里归一成 null
+const cachedConv = (id) => idbTx(['convs'], 'readonly', (s) => s.get(id))
+  .then((v) => (v && v.id === id ? v : null));
+const cachedMsgs = (convId) => idbTx(['msgs'], 'readonly', (s) => s.index('by_conv').getAll(convId)) ?? [];
+// 搜索要扫全库，图片 data URL 一条几百 KB，用游标只投影正文，别把整库搬进内存
+const allCachedMsgs = () => idbTx(['msgs'], 'readonly', (s) => {
+  const acc = [];
+  s.openCursor().onsuccess = (e) => {
+    const c = e.target.result;
+    if (!c) return;
+    const v = c.value;
+    acc.push({ id: v.id, conversation_id: v.conversation_id, role: v.role, created_at: v.created_at, content: v.content });
+    c.continue();
+  };
+  return { get result() { return acc; } };
+});
+const dropMsgCache = (convId) => cachedMsgs(convId).then((rows) =>
+  idbTx(['msgs'], 'readwrite', (s) => rows.forEach((r) => s.delete(r.id))));
+// 回退只抹掉这条及其之后的，更早的本地存档留着（服务端本来就是按 10 天清的）
+const dropMsgCacheFrom = (convId, since) => cachedMsgs(convId).then((rows) =>
+  idbTx(['msgs'], 'readwrite', (s) => rows.filter((r) => (r.created_at ?? 0) >= since).forEach((r) => s.delete(r.id))));
+const dropConvCache = (convId) => idbTx(['convs'], 'readwrite', (s) => s.delete(convId));
+const clearMsgCacheAll = () => idbTx(['convs', 'msgs'], 'readwrite', (cs, ms) => { cs.clear(); ms.clear(); });
+// 尽量别被浏览器清掉（图片 data URL 也存这里，容量按几兆到几十兆计）
+if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 let toastTimer = null;
 function toast(msg) {
@@ -552,17 +642,25 @@ $('#addMcp').onclick = () => openMcpForm(null);
 // ——— 会话 ——————————————————————————————————
 async function loadConvs() {
   S.convs = (await api('conversations')).conversations;
+  cacheConvs(S.convs);
+  // 搜索态时侧栏显示的是命中列表，不能被异步回来的会话列表盖掉
+  // （openConv 尾巴上那个不 await 的 loadConvs 就是这么把搜索结果冲掉的）
+  if (!$('#searchBox').value.trim()) paintConvs(S.convs);
+}
+function paintConvs(list) {
   const box = $('#convList'); box.innerHTML = '';
-  for (const c of S.convs) {
+  for (const c of list) {
     const d = document.createElement('div');
     d.className = 'conv' + (c.id === S.convId ? ' on' : '');
     d.innerHTML = `<span class="t">${esc(c.title)}</span><button class="x" title="删除">×</button>`;
-    d.onclick = (e) => { if (e.target.classList.contains('x')) return; openConv(c.id); closeDrawers(); };
+    d.onclick = (e) => { if (e.target.classList.contains('x')) return; $('#searchBox').value = ''; openConv(c.id); closeDrawers(); };
     d.oncontextmenu = (e) => { e.preventDefault(); renameConv(c); };
     d.querySelector('.x').onclick = async (e) => {
       e.stopPropagation();
       if (!confirm(`删除「${c.title}」及其全部消息？`)) return;
       await api(`conversations/${c.id}`, { method: 'DELETE' });
+      dropMsgCache(c.id);
+      dropConvCache(c.id);
       if (S.convId === c.id) newChat();
       await loadConvs();
     };
@@ -576,6 +674,65 @@ async function renameConv(c) {
   if (S.convId === c.id) { S.convTitle = title.trim(); $('#convTitle').textContent = S.convTitle; }
   await loadConvs();
 }
+
+// ——— 本地关键词搜索 ——————————————————————————
+// 搜的是本机 IndexedDB 缓存，不查服务端：服务端 10 天就清，本地想搜多久都行
+let searchTimer = null;
+$('#searchBox').oninput = (e) => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  searchTimer = setTimeout(() => (q ? runSearch(q) : loadConvs()), 220);
+};
+async function runSearch(q) {
+  const [msgs, convs] = await Promise.all([allCachedMsgs(), cachedConvs()]);
+  const titleOf = new Map(convs.map((c) => [c.id, c.title]));
+  const key = q.toLowerCase();
+  const hits = [];
+  for (const m of msgs) {
+    const text = m.content || '';
+    const at = text.toLowerCase().indexOf(key);
+    if (at < 0) continue;
+    hits.push({
+      conv: m.conversation_id, id: m.id, at: m.created_at, role: m.role,
+      title: titleOf.get(m.conversation_id) || '对话',
+      snippet: text.slice(Math.max(0, at - 40), at + 120),
+    });
+  }
+  hits.sort((a, b) => b.at - a.at);
+  paintHits(q, hits.slice(0, 40));
+}
+function paintHits(q, hits) {
+  const box = $('#convList'); box.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'hit';
+  head.innerHTML = `<b>${hits.length ? `${hits.length} 处命中` : '没有命中'}</b><span>只搜本机缓存过的消息</span>`;
+  box.appendChild(head);
+  const re = new RegExp(escapeRe(esc(q)), 'gi');
+  for (const h of hits) {
+    const d = document.createElement('div');
+    d.className = 'hit';
+    d.innerHTML = `<b>${esc(h.title)}</b>`
+      + esc(h.snippet).replace(re, (m) => `<mark>${m}</mark>`)
+      + `<span><br>${h.role === 'user' ? '我' : esc(appName())} · ${fmtTime(h.at)}</span>`;
+    d.onclick = () => jumpToHit(h.conv, h.id);
+    box.appendChild(d);
+  }
+}
+async function jumpToHit(convId, msgId) {
+  $('#searchBox').value = '';
+  await openConv(convId);
+  const find = () => [...$('#msgs').children].find((n) => n._data?.id === msgId);
+  let node = find();
+  // 命中的那条可能在服务端「最近 200 条」之外，往早翻页找，最多 5 页别翻到天亮
+  for (let i = 0; !node && S.hasMore && i < 5; i++) { await loadOlder(); node = find(); }
+  if (node) {
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    node.classList.add('flash');
+    setTimeout(() => node.classList.remove('flash'), 1900);
+  } else toast('这条只在本地缓存里，服务端已经取不到了');
+  closeDrawers();
+}
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function emptyState() {
   const sug = [
@@ -740,8 +897,9 @@ async function saveNote(m, btn) {
   btn.disabled = true; btn.textContent = '收藏中…';
   try {
     const r = await api('note', { method: 'POST', body: { conversationId: S.convId, messageId: m.id } });
-    m.meta = { ...(m.meta || {}), note: { title: r.title, at: Date.now() } };
+    m.meta = { ...(m.meta || {}), note: { title: r.title, tags: r.tags, at: Date.now() } };
     toast('已存进笔记收件箱');
+    cacheMsgs(S.convId, [m]);
     paintActs(btn.closest('.acts'), m);
   } catch (e) {
     toast(e.message);
@@ -785,21 +943,87 @@ $('#toBottom').onclick = () => scrollDown(true);
 
 async function openConv(id) {
   S.convId = id;
-  S.msgs = [];
+  S.msgs = []; S.hasMore = false;
   $('#msgs').innerHTML = '';
-  const { messages } = await api(`conversations/${id}/messages`);
-  const box = $('#msgs');
-  for (const m of messages) { S.msgs.push(m); box.appendChild(nodeFor(m)); }
-  const c = S.convs.find((x) => x.id === id);
-  S.convTitle = c?.title || '对话';
+
+  // 先画本地缓存：点开会话不用等边缘往返，长会话尤其明显
+  const [rows, convRow] = await Promise.all([cachedMsgs(id), cachedConv(id)]);
+  const cached = rows.sort((a, b) => a.created_at - b.created_at);
+  // 服务端过期清理掉的会话只留在本地，标题也得能从本地取到
+  S.convTitle = (S.convs.find((x) => x.id === id) || convRow)?.title || '对话';
   $('#convTitle').textContent = S.convTitle;
+  if (cached.length) setMsgs(cached);
+
+  // 再以服务端为准（服务端只留 10 天，超期的本地缓存会在这里被对齐掉）
+  try {
+    const { messages, hasMore } = await api(`conversations/${id}/messages`);
+    if (S.convId !== id) return;
+    // hasMore=false 说明服务端确实没有更早的了，那本地比它更老的一段就是独有存档，
+    // 拼回去才谈得上「本地想留多久留多久」，否则搜索命中的老消息会看得到却点不开
+    const oldest = messages.length ? messages[0].created_at : 0;
+    const keep = new Set(messages.map((m) => m.id));
+    const archive = hasMore ? [] : cached.filter((m) => m.created_at < oldest && !keep.has(m.id));
+    setMsgs([...archive, ...messages]);
+    cacheMsgs(id, messages);
+    S.hasMore = !!hasMore;
+    renderMoreBar();
+  } catch (e) {
+    if (!cached.length) toast(e.message);
+    else toast(/会话不存在/.test(e.message) ? '这个会话服务端已过期清理，看到的是本地缓存' : '网络不通，看到的是本地缓存');
+  }
   loadConvs(); scrollDown(true);
+}
+function setMsgs(list) {
+  S.msgs = list;
+  const box = $('#msgs'); box.innerHTML = '';
+  for (const m of list) box.appendChild(nodeFor(m));
+}
+// 长会话按「最近 200 条」取，更早的挂在顶上按需翻页
+function renderMoreBar() {
+  const box = $('#msgs');
+  box.querySelector('#moreBar')?.remove();
+  if (!S.hasMore || !S.msgs.length) return;
+  const bar = document.createElement('div');
+  bar.id = 'moreBar';
+  bar.innerHTML = '<button>↑ 加载更早的消息</button>';
+  bar.onclick = loadOlder;
+  box.insertBefore(bar, box.firstChild);
+}
+let loadingOlder = false;
+async function loadOlder() {
+  const oldest = S.msgs.find((m) => !String(m.id).startsWith('tmp_'));
+  if (!oldest || !S.convId || loadingOlder) return;
+  loadingOlder = true;
+  const box = $('#msgs'), chat = $('#chat'), keep = chat.scrollHeight;
+  try {
+    const { messages, hasMore } = await api(`conversations/${S.convId}/messages?before=${oldest.id}&limit=100`);
+    if (!messages.length) { S.hasMore = false; renderMoreBar(); return; }
+    cacheMsgs(S.convId, messages);
+    barlessInsert(box, messages.map(nodeFor));
+    S.msgs = [...messages, ...S.msgs];
+    S.hasMore = !!hasMore;
+    renderMoreBar();
+    chat.scrollTop = chat.scrollHeight - keep;
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    loadingOlder = false;
+  }
+}
+function barlessInsert(box, nodes) {
+  const bar = box.querySelector('#moreBar');
+  const anchor = bar ? bar.nextElementSibling : box.firstChild;
+  const frag = document.createDocumentFragment();
+  nodes.forEach((n) => frag.appendChild(n));
+  box.insertBefore(frag, anchor);
 }
 function newChat() {
   stopSpeak();
-  S.convId = null; S.convTitle = '新对话'; S.msgs = [];
+  S.convId = null; S.convTitle = '新对话'; S.msgs = []; S.hasMore = false;
   $('#convTitle').textContent = '新对话';
   $('#msgs').innerHTML = emptyState();
+  // 从搜索态退出：侧栏还挂着命中列表的话得换回真实会话列表
+  $('#searchBox').value = ''; paintConvs(S.convs);
   document.querySelectorAll('.conv').forEach((e) => e.classList.remove('on'));
   bindEmpty(); $('#input').focus();
 }
@@ -977,6 +1201,7 @@ async function send({ content, attachments = [], rollbackTo = null, regenerate =
     $('#convTitle').textContent = S.convTitle;
     paintActs(actsEl, am);
     scrollDown();
+    cacheMsgs(S.convId, [um, am]);
     // 服务端会自己取标题，刷新完以它为准
     loadConvs().then(() => {
       const c = S.convs.find((x) => x.id === S.convId);
@@ -989,7 +1214,10 @@ function dropFrom(messageId) {
   const nodes = [...$('#msgs').children];
   const i = nodes.findIndex((n) => n._data?.id === messageId);
   if (i < 0) return;
+  const since = nodes[i]._data.created_at || 0;
   for (const n of nodes.slice(i)) { n.remove(); S.msgs.splice(S.msgs.findIndex((m) => m.id === n._data.id), 1); }
+  // 服务端从这条往后都删了，本地只跟着删这一段：更早的是本地独有的存档，别一并抹掉
+  dropMsgCacheFrom(S.convId, since);
 }
 function liveTool(d) {
   const el = document.createElement('div');
@@ -1200,6 +1428,16 @@ $('#saveName').onclick = async () => {
     toast('已改名');
   } catch (e) { toast(e.message); }
 };
+$('#clearAll').onclick = async () => {
+  if (!confirm('清空全部聊天记录？服务端和本机缓存都会删除，无法恢复。')) return;
+  try {
+    const r = await api('conversations', { method: 'DELETE' });
+    await clearMsgCacheAll();
+    newChat();
+    await loadConvs();
+    toast(`已清空 ${r.deleted} 个会话`);
+  } catch (e) { toast(e.message); }
+};
 $('#voiceSel').innerHTML = VOICES.map(([v, n]) => `<option value="${v}">${n}</option>`).join('');
 $('#voiceSel').value = S.voice;
 
@@ -1295,18 +1533,18 @@ async function loadSettings() {
 async function boot() {
   try {
     paintToggles();
+    // 首屏先吃本地缓存：侧栏和最近一个会话马上有内容，不等这一串往返
+    const local = (await cachedConvs()).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+    if (local.length) { S.convs = local; paintConvs(local); openConv(local[0].id); }
     await loadSettings();
-    await loadProviders();
-    await loadMcp();
-    await loadConvs();
+    await Promise.all([loadProviders(), loadMcp(), loadConvs()]);
     if (!S.providers.some((p) => p.is_enabled)) {
       $('#msgs').innerHTML = '<div class="empty"><h2>还没有启用中的供应商</h2><p>点右上角 ⚙ 添加一个，例如学校 v100 的 OpenAI 兼容地址。</p></div>';
       openDrawer();
-    } else if (S.convs.length) {
-      await openConv(S.convs[0].id);
-    } else newChat();
-    if (edgeMajor()) { /* Edge 内核可用在线音色 */ }
-    else if (S.tts) toast('当前浏览器不是 Edge 内核，朗读将使用系统音色');
+    } else if (!local.length) {
+      if (S.convs.length) await openConv(S.convs[0].id); else newChat();
+    }
+    if (S.tts && !edgeMajor()) toast('当前浏览器不是 Edge 内核，朗读将使用系统音色');
   } catch (e) { console.warn(e); toast(e.message); }
 }
 

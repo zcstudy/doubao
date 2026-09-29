@@ -7,6 +7,7 @@ import {
 import {
   handleListConversations, handleConversationMessages,
   handleDeleteConversation, handleRenameConversation, handleRollback,
+  handleClearConversations,
 } from './conversations.js';
 import { handleChat } from './chat.js';
 import {
@@ -45,6 +46,7 @@ export default {
 
     if (resource === 'conversations') {
       if (m === 'GET' && !id) return handleListConversations(env, userId);
+      if (m === 'DELETE' && !id) return handleClearConversations(env, userId);
       if (m === 'GET' && id && sub === 'messages') return handleConversationMessages(env, userId, id, url);
       if (m === 'POST' && id && sub === 'rollback') return handleRollback(request, env, userId, id);
       if (m === 'PATCH' && id) return handleRenameConversation(request, env, userId, id);

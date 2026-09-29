@@ -10,10 +10,12 @@
 - **流式对话**：具名 SSE 事件（`meta / reasoning / text / tool_start / tool_retry / tool_done / tool_error / notice / error / done`），思考模型的思维链单独折叠显示
 - **多模态**：粘贴 / 拖拽 / 选图，一次最多 4 张；前端压到长边 1280 的 JPEG 再上传，追问时自动带上上一轮的图
 - **联网搜索**：MCP 客户端，可挂多个远程 MCP 服务，模型自主决定调用，工具卡片显示参数、状态和来源链接
-- **收藏到笔记**：每条回答一键推送到笔记 MCP 的收件箱，带来源和模型信息
+- **收藏到笔记**：每条回答一键推送到笔记 MCP 的收件箱；正文只存模型输出原文，标题和标签由模型按笔记服务的要求现拟，`agent` 记应用名便于按来源筛选
 - **导出 Word / PDF**：每条回答一键转文档，正文走 Pandoc 类 MCP 服务转换；文件字节由服务端带令牌取回再以附件下发，浏览器只拿文件、拿不到令牌
 - **朗读**：Edge 在线 TTS（浏览器直连），非 Edge 内核自动退回系统 `speechSynthesis`
 - **会话管理**：重命名 / 删除 / 编辑重发 / 重新生成 / 导出 Markdown 与 JSON，刷新后工具卡片与思考过程照样还原
+- **本地首屏缓存**：D1 是真源，浏览器 IndexedDB 只做缓存——点开会话先画本地再跟服务端校准；侧栏搜索框搜的就是这份缓存，翻页按 `before` + `rowid` 往更早拉
+- **记录分层**：服务端只保留最近 10 天（超期在列表请求上搭车清理，12 小时节流），本机缓存不限时长；设置里有一键清空
 - **应用名可自定义**，深浅色跟随系统，移动端自适应
 - **口令登录**：单用户访问口令 + HMAC token，模型与 MCP 的 Key 只存 D1、只写不读，接口一律打码返回
 
@@ -84,6 +86,12 @@ public/index.html   整个前端
 - **`*.pages.dev` 的短名全局唯一**：撞名时 Cloudflare 静默加后缀（本项目 `doubao` → `doubao-5jj`）
 - **ModelScope Studio 的 `*.ms.show` 域名拒绝匿名与 SDK 直连**（整站 403），生成的文件要改写成同名的 `studio-*.api-inference.modelscope.net` 并带上 `Authorization: Bearer $MODELSCOPE_TOKEN` 才取回来
 - **MCP 的 `inputSchema` 会把整篇示例塞进 `default`**（有个转换工具光默认值就 2KB），喂给模型前必须剥掉，否则每轮都白烧输入 token
+- **消息翻页不能按时间戳**：同一毫秒会写进多条，按 `created_at` 翻会漏会重；锚点用 `rowid`，取 `n+1` 条来判 `hasMore`
+- **IndexedDB 库名要带账号**：令牌是 `payload.sig` 两段（不是标准 JWT，没有 header 段），解第一段且补齐 base64url 的 `=`；用签名段解出来是乱码，全会话落到同一个库，换账号就能把上一个人的聊天搜出来
+- **Pages 没有 cron**：10 天保留期的清理只能搭车在 `GET /api/conversations` 上，靠 `app_settings.prunedAt` 节流；因此改设置时必须合并原始 JSON 回写，否则标记会被抹掉
+- **IndexedDB 缓存层全程吞异常**：无痕、配额满、事务写法不对都只是「缓存没生效」，不报任何错。多 store 的事务是按参数逐个传 store（不是传数组），传错就静默不写入——加缓存时务必实测一次真实落库
+- **`openConv` 尾部不 `await` 的 `loadConvs()` 会冲掉搜索结果**：搜索态（输入框有字）时只更新数据、不重画侧栏
+- **推理型模型的 `max_tokens` 给小了只吐 `reasoning_content`**：拟标题的调用一度永远是 `content` 为空、静默走兜底标题，额度提到 600 才出正文
 
 ## 许可
 

@@ -174,14 +174,44 @@ export async function loadHistory(db, conversationId, limit) {
   return (results ?? []).reverse();
 }
 
-// 展示用：把 images 和 meta 带上，前端还原缩略图与工具卡片
-export async function loadMessagesForDisplay(db, conversationId, limit) {
-  const { results } = await db.prepare(`
-    SELECT id, role, content, images, meta, status, created_at
-    FROM messages WHERE conversation_id = ? AND role IN ('user', 'assistant')
-    ORDER BY rowid ASC LIMIT ?
-  `).bind(conversationId, limit).all();
-  return results ?? [];
+// 展示用：把 images 和 meta 带上，前端还原缩略图与工具卡片。
+// 取「最近」limit 条（DESC 再翻回来），带 before 游标就往更早翻；多取一条用来判断还有没有下一页
+export async function loadMessagesForDisplay(db, conversationId, limit, beforeId) {
+  const base = `SELECT id, role, content, images, meta, status, created_at
+    FROM messages WHERE conversation_id = ? AND role IN ('user', 'assistant')`;
+  const stmt = beforeId
+    ? db.prepare(`${base} AND rowid < (SELECT rowid FROM messages WHERE id = ? AND conversation_id = ?)
+        ORDER BY rowid DESC LIMIT ?`).bind(conversationId, beforeId, conversationId, limit + 1)
+    : db.prepare(`${base} ORDER BY rowid DESC LIMIT ?`).bind(conversationId, limit + 1);
+  const { results } = await stmt.all();
+  const rows = results ?? [];
+  return { messages: rows.slice(0, limit).reverse(), hasMore: rows.length > limit };
+}
+
+// 保留期清理：只删超期的消息和整条超期的会话，两条都走现成索引
+// （idx_msg_conv_created 的前缀、idx_conv_user_updated）
+export async function pruneExpired(db, userId, cutoff) {
+  await db.batch([
+    db.prepare(`DELETE FROM messages WHERE created_at < ?
+      AND conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)`).bind(cutoff, userId),
+    db.prepare('DELETE FROM conversations WHERE user_id = ? AND updated_at < ?').bind(userId, cutoff),
+  ]);
+}
+
+export async function deleteAllConversations(db, userId) {
+  // 一条按子查询删消息、一条删会话：以前是每个会话 bind 一条 DELETE，
+  // 会话一多就撞 D1 batch 的 100 条语句上限
+  const n = await db.prepare('SELECT COUNT(*) AS n FROM conversations WHERE user_id = ?')
+    .bind(userId).first();
+  const deleted = n?.n ?? 0;
+  if (deleted) {
+    await db.batch([
+      db.prepare(`DELETE FROM messages WHERE conversation_id IN
+        (SELECT id FROM conversations WHERE user_id = ?)`).bind(userId),
+      db.prepare('DELETE FROM conversations WHERE user_id = ?').bind(userId),
+    ]);
+  }
+  return deleted;
 }
 
 // 本轮没带图、但更早的用户消息带过图：只取最近一组，让"这张图里是什么"能追问下去
