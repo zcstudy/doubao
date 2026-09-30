@@ -145,6 +145,28 @@ textarea,input,select{font:inherit;color:inherit}
 .acts .docMenu button{padding:3px 8px;border-radius:7px}
 .editbox{width:100%;padding:10px 12px;border-radius:12px;border:1px solid var(--accent);background:var(--bg);resize:vertical}
 
+/* 导出成品：像是 AI 发回来的一份文件，名字 + 类型 + 大小，下载按钮在右边 */
+.msg.file .col{max-width:min(520px,100%)}
+.fileCard{display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;text-align:left;
+  border:1px solid var(--border);border-radius:14px;background:var(--panel)}
+.fileCard .ftag{flex:0 0 auto;width:38px;height:38px;border-radius:9px;display:grid;place-items:center;
+  color:#fff;font-size:10px;font-weight:700;letter-spacing:.4px}
+.fileCard .ftag.docx{background:#2b6cdf}
+.fileCard .ftag.pdf{background:#d0342c}
+.fileCard .fmeta{flex:1;min-width:0;overflow:hidden}
+/* span 默认是 inline，名字和副行会挤成一行、省略号也永不触发，必须块级 */
+.fileCard .fname{display:block;font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fileCard .fsub{display:block;font-size:12px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fileCard .fdl{flex:0 0 auto;padding:7px 15px;border-radius:9px;background:var(--accent);color:#fff;font-size:13px}
+/* 还在转换：虚线边 + 灰按钮，点也没用 */
+.fileCard.ping{border-style:dashed}
+.fileCard.ping .ftag{opacity:.55}
+.fileCard.ping .fdl{background:var(--panel-2);color:var(--muted);cursor:progress}
+@media (max-width:767px) and (orientation:portrait){
+  .fileCard .ftag{width:34px;height:34px}
+  .fileCard .fdl{padding:7px 12px}
+}
+
 /* markdown */
 .msg.ai .body h1,.msg.ai .body h2,.msg.ai .body h3{line-height:1.4;margin:18px 0 8px}
 .msg.ai .body h1{font-size:20px}.msg.ai .body h2{font-size:18px}.msg.ai .body h3{font-size:16px}
@@ -534,12 +556,17 @@ function idbTx(stores, mode, fn) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
-    const req = indexedDB.open(cacheDbName(), 1);
+    // v2 加了 files：导出的 Word/PDF 字节留在本地，刷新后气泡里还能下载
+    const req = indexedDB.open(cacheDbName(), 2);
     req.onupgradeneeded = () => {
       const d = req.result;
       if (!d.objectStoreNames.contains('convs')) d.createObjectStore('convs', { keyPath: 'id' });
       if (!d.objectStoreNames.contains('msgs')) {
         const s = d.createObjectStore('msgs', { keyPath: 'id' });
+        s.createIndex('by_conv', 'conversation_id');
+      }
+      if (!d.objectStoreNames.contains('files')) {
+        const s = d.createObjectStore('files', { keyPath: 'key' });
         s.createIndex('by_conv', 'conversation_id');
       }
     };
@@ -587,7 +614,15 @@ const dropMsgCache = (convId) => cachedMsgs(convId).then((rows) =>
 const dropMsgCacheFrom = (convId, since) => cachedMsgs(convId).then((rows) =>
   idbTx(['msgs'], 'readwrite', (s) => rows.filter((r) => (r.created_at ?? 0) >= since).forEach((r) => s.delete(r.id))));
 const dropConvCache = (convId) => idbTx(['convs'], 'readwrite', (s) => s.delete(convId));
-const clearMsgCacheAll = () => idbTx(['convs', 'msgs'], 'readwrite', (cs, ms) => { cs.clear(); ms.clear(); });
+const clearMsgCacheAll = () => idbTx(['convs', 'msgs', 'files'], 'readwrite', (cs, ms, fs) => { cs.clear(); ms.clear(); fs.clear(); });
+// ——— 导出的文件：字节留在本地 files 库，气泡只是它的入口 ———
+const cacheFile = (rec) => idbTx(['files'], 'readwrite', (s) => s.put(rec));
+const listFiles = (convId) => idbTx(['files'], 'readonly', (s) => s.index('by_conv').getAll(convId)) ?? [];
+const getFile = (key) => idbTx(['files'], 'readonly', (s) => s.get(key)).then((v) => (v && v.key === key ? v : null));
+const dropFilesOf = (convId) => listFiles(convId).then((rows) =>
+  idbTx(['files'], 'readwrite', (s) => rows.forEach((r) => s.delete(r.key))));
+const dropFileKeys = (keys) => keys.length
+  ? idbTx(['files'], 'readwrite', (s) => keys.forEach((k) => s.delete(k))) : Promise.resolve(null);
 // 尽量别被浏览器清掉（图片 data URL 也存这里，容量按几兆到几十兆计）
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
@@ -1005,12 +1040,88 @@ function toggleDocMenu(btn, m) {
   };
   acts.insertBefore(menu, btn.nextSibling);
 }
-// 文件字节由服务端取回后再吐给浏览器：转换服务给的直链匿名访问是 403，前端点不开
+// 导出的成品不再直接落地：先把文件当一条 AI 发回来的消息摆在会话里，下载按钮在它右边。
+// 字节存在 IndexedDB 的 files 库里，所以刷新页面、下次再来，这个气泡还在、还能下载。
+const FMT = {
+  DOCX: { tag: 'DOCX', cls: 'docx', label: 'Word 文档', ext: 'docx' },
+  PDF: { tag: 'PDF', cls: 'pdf', label: 'PDF 文档', ext: 'pdf' },
+};
+function fmtSize(n) {
+  if (!n) return '大小未知';
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+}
+function fileNode(rec) {
+  const el = document.createElement('div');
+  el.className = 'msg ai file'; el.dataset.fkey = rec.key;
+  const f = FMT[rec.format] || FMT.DOCX;
+  const av = document.createElement('div'); av.className = 'avatar'; av.textContent = nameChar();
+  const col = document.createElement('div'); col.className = 'col';
+  const card = document.createElement('div');
+  card.className = 'fileCard' + (rec.ping ? ' ping' : '');
+  card.innerHTML = `<span class="ftag ${f.cls}">${f.tag}</span>
+    <span class="fmeta"><span class="fname"></span><span class="fsub"></span></span>
+    <button class="fdl">${rec.ping ? '生成中' : '下载'}</button>`;
+  card.querySelector('.fname').textContent = rec.name || `AI回答.${f.ext}`;
+  card.querySelector('.fsub').textContent = rec.ping
+    ? `${f.label} · 正在转换，稍等`
+    : `${f.label} · ${fmtSize(rec.size)} · ${fmtTime(rec.at)}`;
+  card.onclick = () => downloadFile(rec, card.querySelector('.fdl'));
+  col.append(card); el.append(av, col);
+  return el;
+}
+// 内存里带着 blob 就直接存，刷过页面之后再点就得回 IndexedDB 捞一次
+async function downloadFile(rec, btn) {
+  if (rec.ping) return;
+  let blob = rec.blob;
+  if (!blob) {
+    btn.disabled = true; btn.textContent = '读取中';
+    blob = (await getFile(rec.key))?.blob ?? null;
+    btn.disabled = false; btn.textContent = '下载';
+    if (blob) rec.blob = blob;
+  }
+  if (!blob) return toast('本地已经没有这份文件了，重新导出一次吧');
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href; a.download = rec.name || `AI回答.${(FMT[rec.format] || FMT.DOCX).ext}`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 60_000);
+}
+// 会话打开时把已导出的文件补回界面上：先清一遍再画，缓存和校准两次渲染不会叠成两份
+// 正在转换的那条除外——后台校准会重绘整个列表，把「生成中」的气泡抹掉之后，
+// 文件生成好了却没地方点，得等下次刷新才冒出来
+const pendingFiles = new Set();
+async function paintFiles(convId) {
+  if (!convId || convId !== S.convId) return;
+  const box = $('#msgs');
+  box.querySelectorAll('.msg.file').forEach((n) => { if (!pendingFiles.has(n.dataset.fkey)) n.remove(); });
+  const rows = await listFiles(convId);
+  for (const r of (rows || []).sort((a, b) => a.at - b.at)) {
+    if (pendingFiles.has(r.key)) continue;
+    const node = fileNode({ ...r, blob: undefined });
+    const anchor = [...box.children].find((n) => n._data?.id === r.message_id);
+    anchor ? anchor.after(node) : box.appendChild(node);
+  }
+}
 async function exportDoc(m, format, btn) {
   if (!m.id || !S.convId) return toast('这条还没存进会话，先等回答结束');
+  const f = FMT[format] || FMT.DOCX;
   const lb = btn.querySelector('.lb');
   const label = lb.textContent;
-  btn.disabled = true; lb.textContent = '生成中…';
+  const key = `${m.id}|${format}`;
+  const cid = S.convId;
+  // 服务端的名字是「本轮提问截 24 字」，这里先按同一套规则猜一个，响应回来再对齐
+  const i = S.msgs.findIndex((x) => x.id === m.id);
+  const asked = i > 0 ? (S.msgs[i - 1].content || '') : '';
+  const guess = (asked.replace(/\s+/g, ' ').trim().slice(0, 24) || 'AI回答') + '.' + f.ext;
+  const rec = { key, conversation_id: S.convId, message_id: m.id, format,
+                name: guess, size: 0, at: Date.now(), ping: true };
+  pendingFiles.add(key);
+  document.querySelector(`#msgs [data-fkey="${CSS.escape(key)}"]`)?.remove();
+  const host = btn.closest('.msg') || $('#msgs').lastElementChild;
+  const el = fileNode(rec);
+  host ? host.after(el) : $('#msgs').appendChild(el);
+  scrollDown(true);
+  btn.disabled = true; lb.textContent = '导出中…';
   try {
     const res = await fetch('/api/export', {
       method: 'POST',
@@ -1024,16 +1135,18 @@ async function exportDoc(m, format, btn) {
     }
     const raw = (res.headers.get('content-disposition') || '').match(/filename\*=UTF-8''([^;]+)/);
     const blob = await res.blob();
-    const href = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = href;
-    a.download = raw ? decodeURIComponent(raw[1]) : `AI回答.${format.toLowerCase()}`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(href), 60_000);
-    toast('已导出 ' + a.download);
+    rec.ping = false; rec.size = blob.size; rec.blob = blob;
+    if (raw) rec.name = decodeURIComponent(raw[1]).replace(/[\\/:*?"<>|]/g, '_') || guess;
+    // 用发起时的 cid：中间切了会话再拿当前的 S.convId 存档，文件就挂错主人了
+    await cacheFile({ key, conversation_id: cid, message_id: m.id, format,
+                      name: rec.name, size: rec.size, at: rec.at, blob });
+    el.replaceWith(fileNode(rec));
+    toast('已生成，点气泡上的「下载」');
   } catch (err) {
+    el.remove();
     toast(err.message);
   } finally {
+    pendingFiles.delete(key);
     btn.disabled = false; lb.textContent = label;
   }
 }
@@ -1175,6 +1288,7 @@ function setMsgs(list) {
   S.msgs = list;
   const box = $('#msgs'); box.innerHTML = '';
   for (const m of list) box.appendChild(nodeFor(m));
+  paintFiles(S.convId);
 }
 // 长会话按「最近 200 条」取，更早的挂在顶上按需翻页
 function renderMoreBar() {
@@ -1201,6 +1315,7 @@ async function loadOlder() {
     S.msgs = [...messages, ...S.msgs];
     S.hasMore = !!hasMore;
     renderMoreBar();
+    paintFiles(S.convId);      // 更早的消息接上来了，文件气泡得重新找各自的挂靠点
     chat.scrollTop = chat.scrollHeight - keep;
   } catch (e) {
     toast(e.message);
@@ -1419,9 +1534,17 @@ function dropFrom(messageId) {
   const i = nodes.findIndex((n) => n._data?.id === messageId);
   if (i < 0) return;
   const since = nodes[i]._data.created_at || 0;
-  for (const n of nodes.slice(i)) { n.remove(); S.msgs.splice(S.msgs.findIndex((m) => m.id === n._data.id), 1); }
+  const deadKeys = [];
+  for (const n of nodes.slice(i)) {
+    // 文件气泡没有 _data，但它跟着自己那条回答一起走，字节也一并删掉
+    if (n.dataset.fkey) { deadKeys.push(n.dataset.fkey); n.remove(); continue; }
+    const idx = S.msgs.findIndex((m) => m.id === n._data?.id);
+    if (idx >= 0) S.msgs.splice(idx, 1);
+    n.remove();
+  }
   // 服务端从这条往后都删了，本地只跟着删这一段：更早的是本地独有的存档，别一并抹掉
   dropMsgCacheFrom(S.convId, since);
+  if (deadKeys.length) dropFileKeys(deadKeys);
 }
 function liveTool(d) {
   const el = toolCard(d);
@@ -1685,8 +1808,10 @@ $('#delConvBtn').onclick = async () => {
   if (!S.convId) return toast('现在还没打开会话，没有可删的');
   const title = S.convTitle || '对话';
   if (!confirm(`删除「${title}」及其全部消息？`)) return;
+  const id = S.convId;
   try {
-    await api(`conversations/${S.convId}`, { method: 'DELETE' });
+    await api(`conversations/${id}`, { method: 'DELETE' });
+    await dropFilesOf(id);       // 导出的 Word/PDF 也留在这台机器上，删会话得一起清掉
     newChat();
     await loadConvs();
     toast('已删除该会话');

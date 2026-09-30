@@ -39,7 +39,7 @@ export async function handleExportDoc(request, env, userId) {
   if (!found) return json({ error: `没找到带 ${DOC_TOOL} 工具的 MCP：先在设置里添加文档导出服务并启用` }, 400);
 
   const asked = (await prevUserMessage(env.DB, conversationId, messageId)) || conv.title || '导出';
-  const markdown = buildDoc({ asked, answer, msg, conv });
+  const markdown = buildDoc({ asked, answer });
 
   let fileUrl;
   try {
@@ -80,10 +80,10 @@ export async function handleExportDoc(request, env, userId) {
   });
 }
 
-// 标题取本轮提问，正文原样带 Markdown，末尾补一行出处
-function buildDoc({ asked, answer, msg, conv }) {
-  const foot = `\n\n---\n\n> 来自 ${conv.model || '未知模型'} 的回答 · ${new Date(msg.created_at).toLocaleString('zh-CN')}`;
-  return `# ${clip(asked, 60) || 'AI 回答'}\n\n${answer}${foot}`.slice(0, 20_000);
+// 标题取本轮提问，正文原样带 Markdown。出处那一行（模型名 + 时间戳）已经去掉：
+// 用户拿的是自己的笔记，不需要文件里再印一遍是谁答的、几点答的
+function buildDoc({ asked, answer }) {
+  return `# ${clip(asked, 60) || 'AI 回答'}\n\n${answer}`.slice(0, 20_000);
 }
 
 // 工具回的是几段文本，第一段就是文件直链
