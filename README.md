@@ -3,7 +3,8 @@
 一个单用户的 AI 聊天网页：界面照豆包做，模型走任意 OpenAI 兼容端点（自建 vLLM / llama.cpp 都行），
 联网搜索和笔记收藏走远程 MCP，全部状态放在 Cloudflare D1。免域名、免服务器，免费额度够用。
 
-在线地址：<https://doubao-5jj.pages.dev>
+在线地址：<https://gd2027.pages.dev>（好记的那个）· <https://doubao-5jj.pages.dev>（最早的一个）
+两个是同一份代码、同一个 D1，历史和设置完全共用；`goudan` 这个短名已被别人占用。
 
 ## 功能
 
@@ -52,13 +53,21 @@ npx wrangler d1 execute ai-chat-db --remote --file=migrations/0002_message_image
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0003_settings.sql
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0004_mcp_tool_aliases.sql
 
+npx wrangler pages project create doubao --production-branch main
+
+npm run build && npx wrangler pages deploy dist --project-name doubao   # 先部署一次，Functions 才会建起来
+
 npx wrangler pages secret put ACCESS_PASSWORD --project-name doubao   # 访问口令
 npx wrangler pages secret put TOKEN_SECRET   --project-name doubao    # token 签名密钥，随机长字符串
 npx wrangler pages secret put MODELSCOPE_TOKEN --project-name doubao  # 可选：导出 Word/PDF 用，魔搭 SDK 令牌 ms-xxxx
-npx wrangler pages project create doubao --production-branch main
 
-npm run build && npx wrangler pages deploy dist --project-name doubao
+# ⚠ Pages 是把环境变量打进每一次部署的：secret 录完必须再部署一次才生效
+npx wrangler pages deploy dist --project-name doubao
 ```
+
+想再多一个域名（本项目就是这么从 `doubao-5jj` 变成 `gd2027` 的）：D1 绑定读的是 `wrangler.jsonc`，
+所以 `pages project create gd2027` + `pages deploy dist --project-name gd2027` 就自动接上同一个数据库，
+历史 / 设置 / 供应商 / MCP 全部共用，只有上面那三条 secret 要在新项目里重录一遍（然后同样再部署一次）。
 
 本地联调：复制 `.dev.vars.example` 为 `.dev.vars` 填上口令与密钥，然后 `npm run dev`
 （`wrangler pages dev dist` 会从 `wrangler.jsonc` 读 D1 绑定，**不要**再手动传 `--d1`，
@@ -90,7 +99,8 @@ public/index.html   整个前端
 - **回退删除按 `rowid` 而不是时间戳**：同一毫秒会写进多条消息，按 `created_at` 会误删
 - **D1 免费额度按行读写计**：所以组装上下文的查询故意不 `select images / meta`，历史图片一条就几百 KB
 - **Edge TTS 的 `Sec-MS-GEC` 校验的是 `User-Agent`**，Workers 不能自定义 WS 请求头，只能在浏览器里直连
-- **`*.pages.dev` 的短名全局唯一**：撞名时 Cloudflare 静默加后缀（本项目 `doubao` → `doubao-5jj`）
+- **`*.pages.dev` 的短名全局唯一**：撞名时 Cloudflare 静默加后缀（本项目 `doubao` → `doubao-5jj`）；`goudan` 已被别人占用（打开是别人的 nginx 页），所以新域名退到 `gd2027`
+- **secret 录完不重新部署是不生效的**：Pages 把环境变量打进每一次部署，实测 `secret put ACCESS_PASSWORD` 之后登录仍报「口令不正确」，再 `pages deploy` 一次立刻就好。删 secret 同理
 - **ModelScope Studio 的 `*.ms.show` 域名拒绝匿名与 SDK 直连**（整站 403），生成的文件要改写成同名的 `studio-*.api-inference.modelscope.net` 并带上 `Authorization: Bearer $MODELSCOPE_TOKEN` 才取回来
 - **MCP 的 `inputSchema` 会把整篇示例塞进 `default`**（有个转换工具光默认值就 2KB），喂给模型前必须剥掉，否则每轮都白烧输入 token
 - **消息翻页不能按时间戳**：同一毫秒会写进多条，按 `created_at` 翻会漏会重；锚点用 `rowid`，取 `n+1` 条来判 `hasMore`
