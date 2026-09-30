@@ -730,7 +730,7 @@ function decorate(root) {
 async function loadProviders() {
   S.providers = (await api('providers')).providers;
   const on = S.providers.find((p) => p.is_enabled);
-  $('#who').textContent = on ? `${on.name} · ${on.model}` : (S.providers.length ? '有供应商但未启用' : '未配置供应商');
+  $('#who').textContent = on ? `${on.name} · ${on.model}` : (S.providers.length ? '有供应商但未设为默认' : '未配置供应商');
   drawProviders();
 }
 function drawProviders() {
@@ -739,11 +739,11 @@ function drawProviders() {
   for (const p of S.providers) {
     const d = document.createElement('div');
     d.className = 'pv' + (p.is_enabled ? ' on' : '');
-    d.innerHTML = `<h4><em>${esc(p.name)}</em>${p.is_enabled ? '<span class="tag">启用中</span>' : ''}</h4>
+    d.innerHTML = `<h4><em>${esc(p.name)}</em>${p.is_enabled ? '<span class="tag">默认</span>' : ''}</h4>
       <div class="meta">${esc(p.base_url)}<br>${esc(p.model)} · ${esc(p.apiKeyMasked)}</div>
       ${p.max_output_tokens ? `<div class="meta">输出上限 ${p.max_output_tokens}</div>` : ''}
       <div class="acts2">
-        ${p.is_enabled ? '' : '<button data-a="enable">启用</button>'}
+        ${p.is_enabled ? '' : '<button data-a="enable">设为默认</button>'}
         <button data-a="test">测试</button><button data-a="edit">编辑</button><button data-a="del">删除</button>
       </div><div class="r"></div>`;
     d.querySelector('.acts2').onclick = async (e) => {
@@ -2015,7 +2015,7 @@ async function boot() {
     await loadSettings();
     await Promise.all([loadProviders(), loadMcp(), loadConvs()]);
     if (!S.providers.some((p) => p.is_enabled)) {
-      $('#msgs').innerHTML = '<div class="empty"><h2>还没有启用中的供应商</h2><p>点右上角 ⚙ 添加一个，例如学校 v100 的 OpenAI 兼容地址。</p></div>';
+      $('#msgs').innerHTML = '<div class="empty"><h2>还没有设为默认的供应商</h2><p>点右上角 ⚙ 添加一个，并在它的卡片上点「设为默认」，例如学校 v100 的 OpenAI 兼容地址。</p></div>';
       openDrawer();
     } else if (!local.length) {
       if (S.convs.length) await openConv(S.convs[0].id); else newChat();
