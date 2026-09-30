@@ -5,7 +5,7 @@
 进门要访问口令，进来之后各人是各人的账号（手机号 + 密码），历史与设置互不可见。
 
 在线地址：<https://gd2027.pages.dev>（就记这个）
-`doubao-5jj.pages.dev` 是同一个数据库上的老项目，等新域名验证过就删掉，免得两个地址记混。
+最早那个 `doubao-5jj.pages.dev` 已经删掉了（项目删了，数据库没动，历史全在 `gd2027` 上）。
 `goudan` 这个短名已被别人占用。
 
 ## 功能
@@ -72,6 +72,11 @@ npx wrangler pages deploy dist --project-name gd2027
 **多用户版的上线顺序**：上面这套跑完，页面上的注册才能用。第一个注册的手机号会把单用户版留在
 `user_id = 'owner'` 下的历史（会话 / 供应商 / MCP / 设置）整体接走，`messages` 靠 `conversation_id`
 跟着会话走，不用单独迁；之后注册的号各起各的，看不到前一个人的任何东西。
+
+**线上现状**（2026-09-30）：`ACCESS_PASSWORD` 与 `TOKEN_SECRET` 已录在 `gd2027`，多用户构建已部署，
+历史已被第一个手机号接走。**`MODELSCOPE_TOKEN` 还没录**——那是老项目 `doubao` 上的 secret，
+Cloudflare 的 secret 只写不可读、复制不过去，老项目删除后只能拿一把新的魔搭 SDK 令牌（`ms-xxxx`）重录一次；
+没录之前其他功能照常，只有导出 Word/PDF 会明确报「服务端还没配 MODELSCOPE_TOKEN」。
 
 想再多一个域名：D1 绑定读的是 `wrangler.jsonc`，所以 `pages project create <新名>` +
 `pages deploy dist --project-name <新名>` 就自动接上同一个数据库，历史 / 设置 / 供应商 / MCP 全部共用，
