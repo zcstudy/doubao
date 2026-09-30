@@ -1,7 +1,7 @@
 import { json } from './util.js';
 import { getSettings, putSettings } from './db.js';
 
-export const DEFAULT_SETTINGS = { appName: 'doubao' };
+export const DEFAULT_SETTINGS = { appName: '狗蛋' };
 
 export async function readSettings(db, userId) {
   // 只把对外有意义的键返回：data 里还存着服务端的清理时间戳之类，不必下发

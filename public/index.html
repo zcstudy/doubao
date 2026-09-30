@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>doubao</title>
+<title>狗蛋</title>
 <style>
 /* 配色只改 --a / --a2 两个色标，--accent / --accent-soft / --user 由它们混出来，
    深色下同一套色板会自动提亮、加深底色，不用为每套配色各写一遍 */
@@ -347,7 +347,7 @@ label.f code{font-family:inherit;color:var(--text)}
 <body>
 
 <aside id="sidebar">
-  <div class="sbar-hd"><span class="brand"><i></i><b id="brandName">doubao</b></span>
+  <div class="sbar-hd"><span class="brand"><i></i><b id="brandName">狗蛋</b></span>
     <button class="icon-btn" id="closeSide" title="收起">«</button>
   </div>
   <button class="btn-new" id="newBtn">＋ 新建对话</button>
@@ -381,7 +381,7 @@ label.f code{font-family:inherit;color:var(--text)}
   <div id="composer"><div class="wrap">
     <div id="attStrip"></div>
     <div class="box">
-      <textarea id="input" rows="1" placeholder="发消息给 doubao…（Enter 发送 / Shift+Enter 换行，可粘贴或拖入图片）"></textarea>
+      <textarea id="input" rows="1" placeholder="发消息给 狗蛋…（Enter 发送 / Shift+Enter 换行，可粘贴或拖入图片）"></textarea>
       <div class="row">
         <button class="pill" id="attachBtn" title="上传图片">📎 图片</button>
         <button class="pill" id="netBtn" title="开启后本次回答会调用搜索工具">🌐 联网搜索</button>
@@ -438,7 +438,7 @@ label.f code{font-family:inherit;color:var(--text)}
 
     <div class="sect">外观</div>
     <label class="f">应用名称（1–24 字，显示在标题栏、侧栏和问候语里）
-      <input id="setName" maxlength="24" placeholder="doubao"></label>
+      <input id="setName" maxlength="24" placeholder="狗蛋"></label>
     <button class="primary" id="saveName">保存名称</button>
     <div class="sect">配色</div>
     <div class="swatches" id="swatches"></div>
@@ -457,7 +457,7 @@ label.f code{font-family:inherit;color:var(--text)}
 
 <div id="gate">
   <form id="gateForm">
-    <h1><i></i><span id="gateName">doubao</span></h1>
+    <h1><i></i><span id="gateName">狗蛋</span></h1>
     <p>输入访问口令继续。<br>口令提示：<b>0010</b></p>
     <input id="gatePw" type="password" autocomplete="current-password" placeholder="访问口令">
     <button class="primary" type="submit">登录</button>
@@ -483,12 +483,12 @@ const S = {
   regenOn: localStorage.getItem('db.regen') === '1',
   accent: localStorage.getItem('db.accent') || 'blue',
   // 名称存在服务端，本地留一份缓存：登录页要在拿到 token 之前就把名字显示对
-  name: localStorage.getItem('db.name') || 'doubao',
+  name: localStorage.getItem('db.name') || '狗蛋',
   atts: [], msgs: [],
 };
-function appName() { return S.name || 'doubao'; }
+function appName() { return S.name || '狗蛋'; }
 function applyName(n) {
-  S.name = n || 'doubao';
+  S.name = n || '狗蛋';
   localStorage.setItem('db.name', S.name);
   document.title = S.name;
   $('#brandName').textContent = S.name;
