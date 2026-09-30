@@ -93,16 +93,16 @@ export async function getEnabledMcpServers(db, userId) {
 
 export async function insertMcpServer(db, s) {
   await db.prepare(`
-    INSERT INTO mcp_servers (id, user_id, name, transport, url, headers, tool_filter, is_enabled, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(s.id, s.user_id, s.name, s.transport, s.url, s.headers, s.tool_filter, s.is_enabled, s.created_at).run();
+    INSERT INTO mcp_servers (id, user_id, name, transport, url, headers, tool_filter, tool_aliases, is_enabled, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(s.id, s.user_id, s.name, s.transport, s.url, s.headers, s.tool_filter, s.tool_aliases, s.is_enabled, s.created_at).run();
 }
 
 export async function updateMcpServer(db, s) {
   await db.prepare(`
-    UPDATE mcp_servers SET name = ?, transport = ?, url = ?, headers = ?, tool_filter = ?, is_enabled = ?
+    UPDATE mcp_servers SET name = ?, transport = ?, url = ?, headers = ?, tool_filter = ?, tool_aliases = ?, is_enabled = ?
     WHERE user_id = ? AND id = ?
-  `).bind(s.name, s.transport, s.url, s.headers, s.tool_filter, s.is_enabled, s.user_id, s.id).run();
+  `).bind(s.name, s.transport, s.url, s.headers, s.tool_filter, s.tool_aliases, s.is_enabled, s.user_id, s.id).run();
 }
 
 export async function deleteMcpServer(db, userId, id) {

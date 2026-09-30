@@ -50,6 +50,7 @@ export async function handleSaveMcpServer(request, env, userId, id) {
     name, transport: 'streamable-http', url,
     headers,
     tool_filter: Array.isArray(body.toolFilter) ? JSON.stringify(body.toolFilter) : (existing?.tool_filter ?? null),
+    tool_aliases: body.toolAliases !== undefined ? cleanAliases(body.toolAliases) : (existing?.tool_aliases ?? null),
     is_enabled: existing?.is_enabled ?? 1,
     created_at: existing?.created_at ?? Date.now(),
   };
@@ -92,6 +93,18 @@ export async function handleTestMcpServer(env, userId, id) {
 }
 
 function str(v) { return typeof v === 'string' && v.trim() ? v.trim() : null; }
+
+// 别名只管界面显示，发给模型的工具名仍是 MCP 里的原名；空对象等于清空
+function cleanAliases(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    const name = String(k).trim().slice(0, 64);
+    const label = String(val).replace(/\s+/g, ' ').trim().slice(0, 24);
+    if (name && label) out[name] = label;
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
 function parseJson(s, d) { try { return typeof s === 'string' ? JSON.parse(s) : (s ?? d); } catch { return d; } }
 function shortErr(e) {
   const m = e?.message || String(e);

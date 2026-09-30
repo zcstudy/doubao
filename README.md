@@ -9,14 +9,18 @@
 
 - **流式对话**：具名 SSE 事件（`meta / reasoning / text / tool_start / tool_retry / tool_done / tool_error / notice / error / done`），思考模型的思维链单独折叠显示
 - **多模态**：粘贴 / 拖拽 / 选图，一次最多 4 张；前端压到长边 1280 的 JPEG 再上传，追问时自动带上上一轮的图
-- **联网搜索**：MCP 客户端，可挂多个远程 MCP 服务，模型自主决定调用，工具卡片显示参数、状态和来源链接
+- **联网搜索**：MCP 客户端，可挂多个远程 MCP 服务，模型自主决定调用；工具卡片默认只写「关键词 N 个 · 参考网址 M 个」，点开才看参数和来源链接
+- **工具显示名可自定义**：`tavily_search → 联网搜索` 这种映射存在 D1，只换界面文案，发给模型的工具名永远是 MCP 原名
 - **收藏到笔记**：每条回答一键推送到笔记 MCP 的收件箱；正文只存模型输出原文，标题和标签由模型按笔记服务的要求现拟，`agent` 记应用名便于按来源筛选
 - **导出 Word / PDF**：每条回答一键转文档，正文走 Pandoc 类 MCP 服务转换；文件字节由服务端带令牌取回再以附件下发，浏览器只拿文件、拿不到令牌
 - **朗读**：Edge 在线 TTS（浏览器直连），非 Edge 内核自动退回系统 `speechSynthesis`
-- **会话管理**：重命名 / 删除 / 编辑重发 / 重新生成 / 导出 Markdown 与 JSON，刷新后工具卡片与思考过程照样还原
+- **会话管理**：重命名 / 删除 / 编辑重发 / 重新生成 / 导出 Markdown 与 JSON，刷新后工具卡片（含折叠状态与显示名）与思考过程照样还原
 - **本地首屏缓存**：D1 是真源，浏览器 IndexedDB 只做缓存——点开会话先画本地再跟服务端校准；侧栏搜索框搜的就是这份缓存，翻页按 `before` + `rowid` 往更早拉
 - **记录分层**：服务端只保留最近 10 天（超期在列表请求上搭车清理，12 小时节流），本机缓存不限时长；设置里有一键清空
 - **应用名可自定义**，深浅色跟随系统，移动端自适应
+- **6 套配色可在设置里换**：只存两个色标，强调色 / 底色 / 气泡色全部由 `color-mix` 推导，深浅色共用同一份定义
+- **手机竖屏只留图标**：消息操作行的图标是内联 SVG，靠 `fill` 在空心 / 实心之间切换，朗读播放中图标会跟着节拍缩放
+- **「内容由模型生成」提示默认隐藏**，设置里可打开
 - **口令登录**：单用户访问口令 + HMAC token，模型与 MCP 的 Key 只存 D1、只写不读，接口一律打码返回
 
 ## 架构
@@ -44,6 +48,7 @@ npx wrangler d1 execute ai-chat-db --remote --file=migrations/0000_init_schema.s
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0001_provider_token_limits.sql
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0002_message_images_meta.sql
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0003_settings.sql
+npx wrangler d1 execute ai-chat-db --remote --file=migrations/0004_mcp_tool_aliases.sql
 
 npx wrangler pages secret put ACCESS_PASSWORD --project-name doubao   # 访问口令
 npx wrangler pages secret put TOKEN_SECRET   --project-name doubao    # token 签名密钥，随机长字符串
@@ -92,6 +97,9 @@ public/index.html   整个前端
 - **IndexedDB 缓存层全程吞异常**：无痕、配额满、事务写法不对都只是「缓存没生效」，不报任何错。多 store 的事务是按参数逐个传 store（不是传数组），传错就静默不写入——加缓存时务必实测一次真实落库
 - **`openConv` 尾部不 `await` 的 `loadConvs()` 会冲掉搜索结果**：搜索态（输入框有字）时只更新数据、不重画侧栏
 - **推理型模型的 `max_tokens` 给小了只吐 `reasoning_content`**：拟标题的调用一度永远是 `content` 为空、静默走兜底标题，额度提到 600 才出正文
+- **显示名不能写进 `meta.tools`**：历史消息存的是 MCP 原名，别名只在前端渲染时映射，改名后老卡片跟着变；反过来若把别名落库，老数据就永远改不动
+- **首屏吃本地缓存时 MCP 还没拉到**：工具卡片先用原名画了一遍，`loadMcp()` 回来必须重刷一遍 `<b>` 文案，否则刷新后显示名要等到下次对话才生效
+- **操作行用 emoji 做不到实心 / 空心**：竖屏只留图标时，「已收藏」「正在朗读」必须看得出来，所以换成内联 SVG，同一份路径靠 `fill: currentColor` 切换；改按钮文字要动 `.lb`，直接写 `button.textContent` 会把 SVG 一起清掉
 
 ## 许可
 
