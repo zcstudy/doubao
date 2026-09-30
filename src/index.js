@@ -1,5 +1,5 @@
 import { verifyToken } from './auth.js';
-import { handleLogin, handleRegister } from './accounts.js';
+import { handleLogin, handleRegister, handleChangePassword } from './accounts.js';
 import { json } from './util.js';
 import {
   handleListProviders, handleSaveProvider, handleEnableProvider,
@@ -34,6 +34,7 @@ export default {
     if (!userId) return json({ error: 'unauthorized' }, 401);
 
     if (m === 'GET' && resource === 'auth') return json({ userId });
+    if (m === 'POST' && resource === 'auth' && id === 'password') return handleChangePassword(request, env, userId);
 
     if (resource === 'providers') {
       if (m === 'GET' && !id) return handleListProviders(env, userId);

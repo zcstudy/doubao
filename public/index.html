@@ -453,6 +453,14 @@ label.f code{font-family:inherit;color:var(--text)}
 
     <div class="sect">账号</div>
     <p class="hint" id="acctLine"></p>
+    <button class="ghost" id="showPw">修改密码</button>
+    <div id="pwForm" class="hide">
+      <label class="f">当前密码<input id="pwOld" type="password" autocomplete="current-password"></label>
+      <label class="f">新密码（6–64 位）<input id="pwNew" type="password" autocomplete="new-password"></label>
+      <label class="f">确认新密码<input id="pwNew2" type="password" autocomplete="new-password"></label>
+      <button class="primary" id="savePw">保存新密码</button>
+      <button class="ghost" id="cancelPw">取消</button>
+    </div>
     <button class="ghost" id="logout">退出登录</button>
   </div>
 </section>
@@ -1876,6 +1884,24 @@ $('#closeDrawer').onclick = closeDrawers;
 $('#scrim').onclick = closeDrawers;
 $('#newBtn').onclick = () => { newChat(); closeDrawers(); };
 $('#logout').onclick = signOut;
+$('#showPw').onclick = () => { const f = $('#pwForm'); f.classList.toggle('hide'); };
+$('#cancelPw').onclick = () => { $('#pwForm').classList.add('hide'); $('#pwOld').value = $('#pwNew').value = $('#pwNew2').value = ''; };
+$('#savePw').onclick = async () => {
+  const old = $('#pwOld').value, nw = $('#pwNew').value;
+  if (!nw || nw.length < 6 || nw.length > 64) return toast('新密码要 6–64 位');
+  if (nw !== $('#pwNew2').value) return toast('两次输入的新密码不一致');
+  const btn = $('#savePw'); btn.disabled = true;
+  try {
+    await api('auth/password', { method: 'POST', body: { current: old, next: nw } });
+    $('#pwForm').classList.add('hide'); $('#pwOld').value = $('#pwNew').value = $('#pwNew2').value = '';
+    toast('密码已改，请用新密码重新登录');
+    signOut();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+};
 $('#lightbox').onclick = () => $('#lightbox').classList.remove('on');
 $('#exportBtn').onclick = (e) => { e.stopPropagation(); $('#exportPop').classList.toggle('on'); };
 document.addEventListener('click', () => $('#exportPop').classList.remove('on'));

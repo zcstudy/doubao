@@ -276,6 +276,10 @@ export async function getUser(db, phone) {
   return db.prepare('SELECT phone, password, created_at FROM users WHERE phone = ?').bind(phone).first();
 }
 
+export async function updateUserPassword(db, phone, password) {
+  await db.prepare('UPDATE users SET password = ? WHERE phone = ?').bind(password, phone).run();
+}
+
 export async function insertUser(db, phone, password, now) {
   await db.prepare('INSERT INTO users (phone, password, created_at) VALUES (?, ?, ?)')
     .bind(phone, password, now).run();
