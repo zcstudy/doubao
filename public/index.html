@@ -51,7 +51,8 @@ textarea,input,select{font:inherit;color:inherit}
          border-right:1px solid var(--border);display:flex;flex-direction:column}
 .sbar-hd{height:56px;display:flex;align-items:center;padding:0 12px 0 16px;gap:8px}
 .brand{font-weight:700;font-size:16px;letter-spacing:.2px;flex:1;display:flex;align-items:center;gap:7px}
-.brand i{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,var(--accent),var(--a2));display:inline-block}
+.brand i{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,var(--accent),var(--a2));
+  display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700;font-style:normal;line-height:1}
 .btn-new{margin:2px 12px 10px;padding:10px 12px;border-radius:12px;background:var(--accent);color:#fff;
          font-weight:600;box-shadow:var(--shadow);display:flex;align-items:center;justify-content:center;gap:6px}
 .btn-new:hover{filter:brightness(1.05)}
@@ -304,7 +305,8 @@ label.f code{font-family:inherit;color:var(--text)}
 #gate{position:fixed;inset:0;background:var(--bg);z-index:90;display:grid;place-items:center;padding:20px}
 #gate form{width:min(360px,100%)}
 #gate h1{font-size:22px;margin:0 0 6px;display:flex;align-items:center;gap:8px}
-#gate h1 i{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--a2));display:inline-block}
+#gate h1 i{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--a2));
+  display:grid;place-items:center;color:#fff;font-size:12px;font-weight:700;font-style:normal;line-height:1}
 #gate p{color:var(--muted);font-size:13px;margin:0 0 18px}
 #gate input{width:100%;padding:12px 13px;border-radius:11px;border:1px solid var(--border);background:var(--bg)}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:80;display:none;place-items:center;padding:24px}
@@ -492,6 +494,8 @@ function applyName(n) {
   $('#brandName').textContent = S.name;
   $('#gateName').textContent = S.name;
   $('#input').placeholder = `发消息给 ${S.name}…（Enter 发送 / Shift+Enter 换行，可粘贴或拖入图片）`;
+  // 品牌位不能是个空色块：和头像同一个路子，放名字首字，改名后登录页和侧栏一起换
+  document.querySelectorAll('.brand i, #gate h1 i').forEach((el) => { el.textContent = nameChar(); });
   // 头像跟着名字走，改名后已经渲染出来的那些也要重画
   document.querySelectorAll('.avatar').forEach((a) => { a.textContent = nameChar(); });
 }
@@ -1050,6 +1054,13 @@ function fmtSize(n) {
   if (!n) return '大小未知';
   return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 }
+// 转换要十几秒，这期间先按「提问里最长的那一段」猜个名字（服务端定名后会被覆盖，
+// 那边还会让模型拟一个更短的）：整句提问当文件名又长又带「：？！」，存到 Windows 上就是灾难
+function guessName(text) {
+  const parts = String(text || '').split(/[^\p{Script=Han}\p{L}\p{N}]+/u).filter((x) => x.length >= 2);
+  const best = parts.sort((a, b) => b.length - a.length)[0];
+  return best ? Array.from(best).slice(0, 16).join('') : 'AI回答';
+}
 function fileNode(rec) {
   const el = document.createElement('div');
   el.className = 'msg ai file'; el.dataset.fkey = rec.key;
@@ -1109,10 +1120,10 @@ async function exportDoc(m, format, btn) {
   const label = lb.textContent;
   const key = `${m.id}|${format}`;
   const cid = S.convId;
-  // 服务端的名字是「本轮提问截 24 字」，这里先按同一套规则猜一个，响应回来再对齐
+  // 转换要十几秒，这期间先按服务端那套规则猜一个名字，响应回来再用 content-disposition 覆盖
   const i = S.msgs.findIndex((x) => x.id === m.id);
   const asked = i > 0 ? (S.msgs[i - 1].content || '') : '';
-  const guess = (asked.replace(/\s+/g, ' ').trim().slice(0, 24) || 'AI回答') + '.' + f.ext;
+  const guess = guessName(asked || S.convTitle) + '.' + f.ext;
   const rec = { key, conversation_id: S.convId, message_id: m.id, format,
                 name: guess, size: 0, at: Date.now(), ping: true };
   pendingFiles.add(key);

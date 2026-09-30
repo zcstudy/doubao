@@ -1,6 +1,6 @@
 import { json } from './util.js';
 import {
-  getConversation, getMessage, prevUserMessage, getEnabledMcpServers,
+  getConversation, getMessage, prevUserMessage, getEnabledMcpServers, getEnabledProvider,
 } from './db.js';
 import { listTools, callTool } from './mcp.js';
 
@@ -41,6 +41,8 @@ export async function handleExportDoc(request, env, userId) {
   const asked = (await prevUserMessage(env.DB, conversationId, messageId)) || conv.title || '导出';
   const markdown = buildDoc({ asked, answer });
 
+  // 拟名字和转换并行跑：拟名字只是几百 token 的一次小调用，串在后面等于让用户多等两三秒
+  const naming = draftFileName(env, userId, asked, answer);
   let fileUrl;
   try {
     const r = await callTool(found.server, DOC_TOOL, {
@@ -70,7 +72,8 @@ export async function handleExportDoc(request, env, userId) {
     return json({ error: `取回文件失败：HTTP ${res.status} ${detail}` }, 502);
   }
 
-  const name = `${clip(asked, 24) || 'AI回答'}.${FORMATS[format]}`;
+  const base = (await naming) || docName(asked, conv.title);
+  const name = `${base}.${FORMATS[format]}`;
   return new Response(await res.arrayBuffer(), {
     headers: {
       'content-type': MIME[format],
@@ -85,6 +88,64 @@ export async function handleExportDoc(request, env, userId) {
 function buildDoc({ asked, answer }) {
   return `# ${clip(asked, 60) || 'AI 回答'}\n\n${answer}`.slice(0, 20_000);
 }
+
+// 文件名不能是整句提问：冒号问号斜杠这些要么非法要么难看，而且太长看不出重点。
+// 按符号把提问切成几段，取最长的那一段（一般是真正的主题，「帮我查一下」这种短前缀自然被丢掉）
+const NOT_WORD = /[^\p{Script=Han}\p{L}\p{N}]+/u;
+
+function docName(asked, fallback) {
+  const parts = clauses(asked).length ? clauses(asked) : clauses(fallback);
+  const best = parts.sort((a, b) => b.length - a.length)[0];
+  return best ? Array.from(best).slice(0, 16).join('') : 'AI回答';
+}
+
+function clauses(s) {
+  return String(s || '').split(NOT_WORD).filter((x) => x.length >= 2);
+}
+
+const NAME_PROMPT =
+  '你在为一份要保存到磁盘的文档拟文件名。只输出文件名本身，不要解释、不要引号、不要扩展名。\n' +
+  '要求：4–12 个字；只用汉字、英文字母和数字，一个标点、空格、斜杠、日期都不要出现；\n' +
+  '概括这份文档真正讲的是什么；不要用「AI回答」「总结」「笔记」「文档」「报告」这类占位词。';
+
+// 供应商没启用、超时、吐回来的东西不像名字——都不阻断导出，回空串让 docName() 兜底。
+// 这个函数自己把异常吞干净：调用点在它 reject 之前可能先 return，会留一个 unhandled rejection
+async function draftFileName(env, userId, asked, answer) {
+  try {
+    const provider = await getEnabledProvider(env.DB, userId);
+    if (!provider) return '';
+    const res = await fetch(`${provider.base_url.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${provider.api_key}`,
+        'content-type': 'application/json',
+        ...parseJson(provider.extra_headers, {}),
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        stream: false,
+        // 推理型模型 max_tokens 给小了只吐 reasoning_content，正文永远是空的
+        max_tokens: 600,
+        messages: [
+          { role: 'system', content: NAME_PROMPT },
+          { role: 'user', content: `【提问】${asked.slice(0, 200)}\n【回答】${answer.slice(0, 1200)}` },
+        ],
+      }),
+      signal: AbortSignal.timeout(25_000),
+    });
+    if (!res.ok) return '';
+    const j = await res.json().catch(() => null);
+    return cleanName(j?.choices?.[0]?.message?.content || '');
+  } catch { return ''; }
+}
+
+// 只留汉字、字母和数字，最多 16 个：模型偶尔会带书名号、扩展名甚至一整句解释
+function cleanName(s) {
+  const t = String(s || '').replace(NOT_WORD, '').slice(0, 16);
+  return t.length >= 2 ? t : '';
+}
+
+function parseJson(s, d) { try { return typeof s === 'string' ? JSON.parse(s) : (s ?? d); } catch { return d; } }
 
 // 工具回的是几段文本，第一段就是文件直链
 function pickFileUrl(text, format) {
