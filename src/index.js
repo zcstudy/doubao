@@ -1,4 +1,5 @@
-import { signToken, verifyToken, checkPassword } from './auth.js';
+import { verifyToken } from './auth.js';
+import { handleLogin, handleRegister } from './accounts.js';
 import { json } from './util.js';
 import {
   handleListProviders, handleSaveProvider, handleEnableProvider,
@@ -18,8 +19,6 @@ import { handleGetSettings, handlePutSettings } from './settings.js';
 import { handleSaveNote } from './notes.js';
 import { handleExportDoc } from './export.js';
 
-const DAY = 86_400_000;
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -29,6 +28,7 @@ export default {
     const m = request.method;
 
     if (m === 'POST' && resource === 'auth' && id === 'login') return handleLogin(request, env);
+    if (m === 'POST' && resource === 'auth' && id === 'register') return handleRegister(request, env);
 
     const userId = await verifyToken(bearer(request), env);
     if (!userId) return json({ error: 'unauthorized' }, 401);
@@ -77,23 +77,7 @@ export default {
   },
 };
 
-async function handleLogin(request, env) {
-  const body = await readJsonBody(request);
-  if (!body || typeof body.password !== 'string') return json({ error: 'bad request' }, 400);
-  if (!(await checkPassword(body.password, env))) return json({ error: '口令不正确' }, 401);
-  const userId = env.ACCOUNT_OWNER || 'owner';
-  return json({ token: await signToken(userId, env, 7 * DAY), userId });
-}
-
 function bearer(request) {
   const h = request.headers.get('authorization') || '';
   return h.startsWith('Bearer ') ? h.slice(7) : '';
-}
-
-const MAX_BODY = 100 * 1024;
-
-async function readJsonBody(request) {
-  const len = Number(request.headers.get('content-length') || 0);
-  if (!len || len > MAX_BODY) return null;
-  try { return await request.json(); } catch { return null; }
 }

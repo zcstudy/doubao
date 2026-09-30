@@ -303,12 +303,16 @@ label.f code{font-family:inherit;color:var(--text)}
 
 /* 登录 / 灯箱 / toast */
 #gate{position:fixed;inset:0;background:var(--bg);z-index:90;display:grid;place-items:center;padding:20px}
-#gate form{width:min(360px,100%)}
+#gate form{width:min(360px,100%);display:flex;flex-direction:column;gap:10px}
 #gate h1{font-size:22px;margin:0 0 6px;display:flex;align-items:center;gap:8px}
 #gate h1 i{width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--a2));
   display:grid;place-items:center;color:#fff;font-size:12px;font-weight:700;font-style:normal;line-height:1}
-#gate p{color:var(--muted);font-size:13px;margin:0 0 18px}
+#gate p{color:var(--muted);font-size:13px;margin:0}
 #gate input{width:100%;padding:12px 13px;border-radius:11px;border:1px solid var(--border);background:var(--bg)}
+/* .primary 自带 12px 上边距，flex 的 gap 已经留过位置了，登录页里收掉 */
+#gate .primary{margin-top:2px}
+#gate .mid{display:flex;gap:6px;align-items:center;justify-content:center}
+#gate .link{color:var(--accent);font-size:13px;padding:0}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:80;display:none;place-items:center;padding:24px}
 #lightbox.on{display:grid}
 #lightbox img{max-width:100%;max-height:100%;border-radius:10px}
@@ -448,6 +452,7 @@ label.f code{font-family:inherit;color:var(--text)}
     <button class="ghost" id="clearAll">🗑 清空全部聊天记录</button>
 
     <div class="sect">账号</div>
+    <p class="hint" id="acctLine"></p>
     <button class="ghost" id="logout">退出登录</button>
   </div>
 </section>
@@ -458,9 +463,12 @@ label.f code{font-family:inherit;color:var(--text)}
 <div id="gate">
   <form id="gateForm">
     <h1><i></i><span id="gateName">狗蛋</span></h1>
-    <p>输入访问口令继续。<br>口令提示：<b>0010</b></p>
-    <input id="gatePw" type="password" autocomplete="current-password" placeholder="访问口令">
-    <button class="primary" type="submit">登录</button>
+    <p id="gateTip">手机号 + 密码登录。<br>口令提示：<b>0010</b></p>
+    <input id="gatePhone" type="tel" inputmode="numeric" maxlength="11" autocomplete="username" placeholder="手机号">
+    <input id="gatePw" type="password" autocomplete="current-password" placeholder="密码">
+    <input id="gateAccess" type="password" autocomplete="off" placeholder="访问口令">
+    <button class="primary" type="submit" id="gateSubmit">登录</button>
+    <p class="mid"><span id="gateSwitchTip">还没有账号？</span><button type="button" class="link" id="gateSwitch">注册一个</button></p>
     <div class="err hide" id="gateErr"></div>
   </form>
 </div>
@@ -471,18 +479,18 @@ label.f code{font-family:inherit;color:var(--text)}
 const $ = (s) => document.querySelector(s);
 const S = {
   token: localStorage.getItem('db.tok') || '',
+  // 只记手机号方便下次登录，密码一律由浏览器自己记住
+  phone: localStorage.getItem('db.phone') || '',
   providers: [], mcps: [], convs: [], convId: null, convTitle: '新对话',
   streaming: false, abort: null, editing: null, editingMcp: null,
-  // 联网默认开：只有显式关过（'0'）才保持关闭
+  // 下面这一整组在 D1 里有一份，这里只是登录前/断网时的本机缓存，登录后被服务端覆盖
   net: localStorage.getItem('db.net') !== '0',
   tts: localStorage.getItem('db.tts') === '1',
   voice: localStorage.getItem('db.voice') || 'zh-CN-XiaoxiaoNeural',
-  // 免责声明默认藏起来，嫌它占地方的人多；配色和深浅色一样只存本机
   hint: localStorage.getItem('db.hint') === '1',
-  // 「重新生成」用得少，默认从操作行收起来；配色和这些开关一样只存本机
   regenOn: localStorage.getItem('db.regen') === '1',
   accent: localStorage.getItem('db.accent') || 'blue',
-  // 名称存在服务端，本地留一份缓存：登录页要在拿到 token 之前就把名字显示对
+  theme: localStorage.getItem('db.theme') || 'auto',
   name: localStorage.getItem('db.name') || '狗蛋',
   atts: [], msgs: [],
 };
@@ -521,8 +529,47 @@ function applyAccent(id) {
 }
 $('#swatches').innerHTML = PALETTES.map(([id, name, a, a2]) =>
   `<button class="sw" data-c="${id}" title="${name}" style="--s1:${a};--s2:${a2}"></button>`).join('');
-$('#swatches').onclick = (e) => { if (e.target.dataset.c) applyAccent(e.target.dataset.c); };
+$('#swatches').onclick = (e) => { if (e.target.dataset.c) { applyAccent(e.target.dataset.c); pushSettings(); } };
 applyAccent(S.accent);
+
+// ——— 深浅色 ——————————————————————————————
+// auto 是「不写 data-theme，交给系统偏好」，所以只能移掉属性，不能设成空串
+function applyTheme(v) {
+  S.theme = v === 'light' || v === 'dark' ? v : 'auto';
+  localStorage.setItem('db.theme', S.theme);
+  if (S.theme === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.dataset.theme = S.theme;
+}
+
+// ——— 设置同步 ——————————————————————————————
+// 服务端是唯一真源，localStorage 只是本机缓存：换设备、换浏览器登录进来要能还原。
+// settingsLoaded 之前不推——那会儿手里只有本机默认值，推上去会把服务端的覆盖掉
+let settingsLoaded = false;
+let pushTimer = null;
+function pushSettings() {
+  if (!settingsLoaded) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    api('settings', {
+      method: 'PUT',
+      body: {
+        appName: S.name, accent: S.accent, theme: S.theme, voice: S.voice,
+        net: S.net, tts: S.tts, hint: S.hint, regen: S.regenOn,
+      },
+    }).catch(() => { /* 没存上就算了，下次改设置会再存一遍 */ });
+  }, 600);
+}
+function applyServerSettings(s) {
+  if (!s) return;
+  applyName(s.appName);
+  applyAccent(s.accent);
+  applyTheme(s.theme);
+  S.voice = s.voice;
+  S.net = s.net; S.tts = s.tts; S.hint = s.hint; S.regenOn = s.regen;
+  paintToggles();
+  $('#voiceSel').value = S.voice;
+  $('#setName').value = appName();
+}
 
 // ——— 基础设施 ——————————————————————————————
 async function api(path, opts = {}) {
@@ -540,6 +587,9 @@ async function api(path, opts = {}) {
 function signOut() {
   stopSpeak();
   S.token = ''; S.convId = null; localStorage.removeItem('db.tok');
+  // 退出后本机手里只剩默认值，此时再推设置会把服务端的真源盖掉
+  settingsLoaded = false;
+  $('#gatePhone').value = S.phone;
   $('#gate').classList.remove('hide');
 }
 
@@ -556,12 +606,12 @@ function cacheDbName() {
     return 'doubao-cache-' + (typeof sub === 'string' && sub ? sub : 'anon');
   } catch { return 'doubao-cache-anon'; }
 }
-function idbTx(stores, mode, fn) {
+function idbTx(stores, mode, fn, name = cacheDbName()) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
     // v2 加了 files：导出的 Word/PDF 字节留在本地，刷新后气泡里还能下载
-    const req = indexedDB.open(cacheDbName(), 2);
+    const req = indexedDB.open(name, 2);
     req.onupgradeneeded = () => {
       const d = req.result;
       if (!d.objectStoreNames.contains('convs')) d.createObjectStore('convs', { keyPath: 'id' });
@@ -627,6 +677,22 @@ const dropFilesOf = (convId) => listFiles(convId).then((rows) =>
   idbTx(['files'], 'readwrite', (s) => rows.forEach((r) => s.delete(r.key))));
 const dropFileKeys = (keys) => keys.length
   ? idbTx(['files'], 'readwrite', (s) => keys.forEach((k) => s.delete(k))) : Promise.resolve(null);
+// 单用户版的缓存库名是 doubao-cache-owner，换手机号登录后库名跟着 sub 变了。
+// 不搬这一次，超过 10 天、服务端早就清掉的那部分历史会在换号当天凭空消失
+async function adoptLegacyCache() {
+  const cur = cacheDbName();
+  if (cur === 'doubao-cache-anon' || cur === 'doubao-cache-owner') return;
+  const names = indexedDB.databases ? (await indexedDB.databases()).map((d) => d.name) : null;
+  if (names && !names.includes('doubao-cache-owner')) return;
+  const old = await idbTx(['convs'], 'readonly', (s) => s.getAll(), 'doubao-cache-owner');
+  if (!old?.length) return;
+  if ((await cachedConvs())?.length) return;   // 新库里已经有东西了，别拿旧的盖它
+  const oldMsgs = await idbTx(['msgs'], 'readonly', (s) => s.getAll(), 'doubao-cache-owner');
+  const oldFiles = await idbTx(['files'], 'readonly', (s) => s.getAll(), 'doubao-cache-owner');
+  await idbTx(['convs'], 'readwrite', (s) => old.forEach((r) => r?.id && s.put(r)));
+  await idbTx(['msgs'], 'readwrite', (s) => (oldMsgs ?? []).forEach((r) => r?.id && s.put(r)));
+  await idbTx(['files'], 'readwrite', (s) => (oldFiles ?? []).forEach((r) => r?.key && s.put(r)));
+}
 // 尽量别被浏览器清掉（图片 data URL 也存这里，容量按几兆到几十兆计）
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
@@ -1748,29 +1814,29 @@ function paintToggles() {
   $('#aiHint').hidden = !S.hint;
   $('#swRegen').classList.toggle('on', S.regenOn);
 }
-$('#netBtn').onclick = () => { S.net = !S.net; localStorage.setItem('db.net', S.net ? '1' : '0'); paintToggles();
+$('#netBtn').onclick = () => { S.net = !S.net; localStorage.setItem('db.net', S.net ? '1' : '0'); paintToggles(); pushSettings();
   if (S.net && !S.mcps.some((s) => s.is_enabled)) toast('联网已打开，但还没有启用中的 MCP 搜索服务（设置里可加）'); };
-$('#ttsBtn').onclick = () => { S.tts = !S.tts; localStorage.setItem('db.tts', S.tts ? '1' : '0'); paintToggles(); if (!S.tts) stopSpeak(); };
+$('#ttsBtn').onclick = () => { S.tts = !S.tts; localStorage.setItem('db.tts', S.tts ? '1' : '0'); paintToggles(); pushSettings(); if (!S.tts) stopSpeak(); };
 $('#swNet').onclick = () => $('#netBtn').click();
 $('#swTts').onclick = () => $('#ttsBtn').click();
-$('#swHint').onclick = () => { S.hint = !S.hint; localStorage.setItem('db.hint', S.hint ? '1' : '0'); paintToggles(); };
+$('#swHint').onclick = () => { S.hint = !S.hint; localStorage.setItem('db.hint', S.hint ? '1' : '0'); paintToggles(); pushSettings(); };
 $('#swRegen').onclick = () => {
   S.regenOn = !S.regenOn; localStorage.setItem('db.regen', S.regenOn ? '1' : '0');
-  paintToggles();
+  paintToggles(); pushSettings();
   // 已经画出来的操作行当场补上/撤掉按钮，不用刷新页面
   document.querySelectorAll('#msgs .msg.ai').forEach((el) => {
     const acts = el.querySelector('.acts');
     if (acts && el._data) paintActs(acts, el._data);
   });
 };
-$('#voiceSel').onchange = (e) => { S.voice = e.target.value; localStorage.setItem('db.voice', S.voice); };
+$('#voiceSel').onchange = (e) => { S.voice = e.target.value; localStorage.setItem('db.voice', S.voice); pushSettings(); };
 
 $('#saveName').onclick = async () => {
   const name = $('#setName').value.trim();
   if (!name) return toast('名称不能为空');
   try {
     const d = await api('settings', { method: 'PUT', body: { appName: name } });
-    applyName(d.settings?.appName);
+    applyServerSettings(d.settings);
     // 空状态问候语已经渲染过了，重画一次才跟上新名字
     if (!S.convId) $('#msgs').innerHTML = emptyState(), bindEmpty();
     toast('已改名');
@@ -1852,36 +1918,70 @@ function exportConv(kind) {
 }
 $('#themeBtn').onclick = () => {
   const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
-  document.documentElement.dataset.theme = cur === 'dark' ? 'light' : 'dark';
-  localStorage.setItem('db.theme', document.documentElement.dataset.theme);
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+  pushSettings();
 };
-const savedTheme = localStorage.getItem('db.theme');
-if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+applyTheme(S.theme);
+
+// ——— 登录 / 注册 ————————————————————————————
+// 注册和登录填的是同一组字段，只多一个口令：口令错就什么都建不出来
+let gateMode = 'login';
+function setGateMode(mode) {
+  gateMode = mode === 'register' ? 'register' : 'login';
+  const reg = gateMode === 'register';
+  $('#gateSubmit').textContent = reg ? '注册并登录' : '登录';
+  $('#gatePw').autocomplete = reg ? 'new-password' : 'current-password';
+  $('#gatePw').placeholder = reg ? '设置密码（6–64 位）' : '密码';
+  $('#gateTip').innerHTML = reg
+    ? '第一次用：手机号没注册过就能建号，访问口令要填对。<br>口令提示：<b>0010</b>'
+    : '手机号 + 密码登录。<br>口令提示：<b>0010</b>';
+  $('#gateSwitchTip').textContent = reg ? '已经有账号了？' : '还没有账号？';
+  $('#gateSwitch').textContent = reg ? '去登录' : '注册一个';
+  $('#gateErr').classList.add('hide');
+}
+$('#gateSwitch').onclick = () => setGateMode(gateMode === 'login' ? 'register' : 'login');
+$('#gatePhone').value = S.phone;
+setGateMode('login');
 
 $('#gateForm').onsubmit = async (e) => {
   e.preventDefault();
   const err = $('#gateErr'); err.classList.add('hide');
+  const btn = $('#gateSubmit'); btn.disabled = true;
   try {
-    const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: $('#gatePw').value }) });
+    const body = {
+      phone: $('#gatePhone').value.trim(),
+      password: $('#gatePw').value,
+      accessPassword: $('#gateAccess').value,
+    };
+    const res = await fetch(`/api/auth/${gateMode === 'register' ? 'register' : 'login'}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `登录失败 ${res.status}`);
-    S.token = data.token; localStorage.setItem('db.tok', data.token);
+    if (!res.ok) throw new Error(data.error || `失败（${res.status}）`);
+    S.token = data.token; S.phone = body.phone;
+    localStorage.setItem('db.tok', data.token);
+    localStorage.setItem('db.phone', body.phone);
+    $('#gateAccess').value = '';
     $('#gate').classList.add('hide');
     await boot();
   } catch (e2) { err.textContent = e2.message; err.classList.remove('hide'); }
+  finally { btn.disabled = false; }
 };
+
+function maskPhone(p) {
+  return /^\d{11}$/.test(p) ? `${p.slice(0, 3)}****${p.slice(7)}` : (p || '未登录');
+}
 
 async function loadSettings() {
   try {
-    const d = await api('settings');
-    applyName(d.settings?.appName);
-    $('#setName').value = appName();
-  } catch { /* 拿不到就用本地缓存的名字，不该因此挡住界面 */ }
+    applyServerSettings((await api('settings')).settings);
+  } catch { /* 拿不到就用本机缓存的那份，不该因此挡住界面 */ }
+  settingsLoaded = true;
 }
 
 async function boot() {
   try {
+    $('#acctLine').textContent = '当前账号：' + maskPhone(S.phone);
+    await adoptLegacyCache();
     paintToggles();
     // 首屏先吃本地缓存：侧栏和最近一个会话马上有内容，不等这一串往返
     const local = (await cachedConvs()).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
@@ -1902,6 +2002,11 @@ async function boot() {
   if (!S.token) return;
   const res = await fetch('/api/auth', { headers: { authorization: 'Bearer ' + S.token } });
   if (!res.ok) return signOut();
+  const data = await res.json().catch(() => ({}));
+  // 单用户版的令牌身份是 'owner'，多用户版不再认它。与其画出一个空历史的界面
+  // 让人以为聊天丢了，不如直接请回登录页重登一次
+  if (!data.userId || data.userId === 'owner') return signOut();
+  S.phone = data.userId;
   $('#gate').classList.add('hide');
   boot();
 })();

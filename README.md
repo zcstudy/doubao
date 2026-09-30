@@ -1,10 +1,12 @@
 # doubao — 自托管 AI 聊天站（Cloudflare Pages + Functions + D1）
 
-一个单用户的 AI 聊天网页：界面照豆包做，模型走任意 OpenAI 兼容端点（自建 vLLM / llama.cpp 都行），
+一个多用户的 AI 聊天网页：界面照豆包做，模型走任意 OpenAI 兼容端点（自建 vLLM / llama.cpp 都行），
 联网搜索和笔记收藏走远程 MCP，全部状态放在 Cloudflare D1。免域名、免服务器，免费额度够用。
+进门要访问口令，进来之后各人是各人的账号（手机号 + 密码），历史与设置互不可见。
 
-在线地址：<https://gd2027.pages.dev>（好记的那个）· <https://doubao-5jj.pages.dev>（最早的一个）
-两个是同一份代码、同一个 D1，历史和设置完全共用；`goudan` 这个短名已被别人占用。
+在线地址：<https://gd2027.pages.dev>（就记这个）
+`doubao-5jj.pages.dev` 是同一个数据库上的老项目，等新域名验证过就删掉，免得两个地址记混。
+`goudan` 这个短名已被别人占用。
 
 ## 功能
 
@@ -18,13 +20,14 @@
 - **会话管理**：重命名 / 删除 / 编辑重发 / 重新生成 / 导出 Markdown 与 JSON，刷新后工具卡片（含折叠状态与显示名）与思考过程照样还原
 - **本地首屏缓存**：D1 是真源，浏览器 IndexedDB 只做缓存——点开会话先画本地再跟服务端校准；侧栏搜索框搜的就是这份缓存，翻页按 `before` + `rowid` 往更早拉
 - **记录分层**：服务端只保留最近 10 天（超期在列表请求上搭车清理，12 小时节流），本机缓存不限时长；设置里有一键清空
-- **应用名可自定义**：头像、侧栏品牌位、登录页、浏览器标签页标题一起换，改名当场生效不用刷新；深浅色跟随系统，移动端自适应
+- **应用名可自定义**：头像、侧栏品牌位、登录页、浏览器标签页标题一起换，改名当场生效不用刷新；新设备没登录时显示默认名「狗蛋」，登录一次后读到你服务端的自定义名
 - **6 套配色可在设置里换**：只存两个色标，强调色 / 底色 / 气泡色全部由 `color-mix` 推导，深浅色共用同一份定义
+- **设置存在服务端，换设备登录就还原**：应用名、配色、深浅色、联网、朗读、音色、「内容由模型生成」提示、「重新生成」开关这 8 项全进 D1 的 `app_settings`；`localStorage` 只留一份本机缓存，好在登录页拿到 token 之前先把界面摆对
 - **手机竖屏只留图标**：消息操作行的图标是内联 SVG，靠 `fill` 在空心 / 实心之间切换，朗读播放中图标会跟着节拍缩放
 - **收藏是主操作**：图标换成实心五角星、常态就染成主题色（不是灰描边），竖屏 19px 比别的图标大一档；已收藏改用主题色底圈 + `✓` 角标，和"没收藏"一眼分开
-- **重新生成默认收起**：回答操作行里的「重新生成」默认不渲染，设置「通用」区的开关（`localStorage.db.regen`）打开后当场重画已渲染的操作行；用户消息上的「编辑重发」不受这个开关影响
+- **重新生成默认收起**：回答操作行里的「重新生成」默认不渲染，设置「通用」区的开关打开后当场重画已渲染的操作行；用户消息上的「编辑重发」不受这个开关影响
 - **「内容由模型生成」提示默认隐藏**，设置里可打开
-- **口令登录**：单用户访问口令 + HMAC token，模型与 MCP 的 Key 只存 D1、只写不读，接口一律打码返回
+- **账号体系**：手机号 + 密码注册与登录，两者都要再输一遍访问口令——口令是建号门槛，没有口令谁也注册不出账号；口令本身仍是那一条 `ACCESS_PASSWORD` secret，不入库。模型与 MCP 的 Key 只存 D1、只写不读，接口一律打码返回
 
 ## 架构
 
@@ -32,7 +35,7 @@
 浏览器  ──▶  Cloudflare Pages（静态 index.html）
                 │  /api/* 交给 _worker.js（Pages Functions 高级模式）
                 ▼
-        Cloudflare D1（SQLite）  ── providers / mcp_servers / conversations / messages / app_settings
+        Cloudflare D1（SQLite）  ── users / providers / mcp_servers / conversations / messages / app_settings
                 │
                 ├──▶ 模型端点（OpenAI 兼容 /chat/completions，流式）
                 └──▶ 远程 MCP 服务（streamable HTTP）
@@ -52,22 +55,27 @@ npx wrangler d1 execute ai-chat-db --remote --file=migrations/0001_provider_toke
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0002_message_images_meta.sql
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0003_settings.sql
 npx wrangler d1 execute ai-chat-db --remote --file=migrations/0004_mcp_tool_aliases.sql
+npx wrangler d1 execute ai-chat-db --remote --file=migrations/0005_users.sql
 
-npx wrangler pages project create doubao --production-branch main
+npx wrangler pages project create gd2027 --production-branch main
 
-npm run build && npx wrangler pages deploy dist --project-name doubao   # 先部署一次，Functions 才会建起来
+npm run build && npx wrangler pages deploy dist --project-name gd2027   # 先部署一次，Functions 才会建起来
 
-npx wrangler pages secret put ACCESS_PASSWORD --project-name doubao   # 访问口令
-npx wrangler pages secret put TOKEN_SECRET   --project-name doubao    # token 签名密钥，随机长字符串
-npx wrangler pages secret put MODELSCOPE_TOKEN --project-name doubao  # 可选：导出 Word/PDF 用，魔搭 SDK 令牌 ms-xxxx
+npx wrangler pages secret put ACCESS_PASSWORD --project-name gd2027   # 访问口令：进门和注册都要它
+npx wrangler pages secret put TOKEN_SECRET   --project-name gd2027    # token 签名密钥，随机长字符串
+npx wrangler pages secret put MODELSCOPE_TOKEN --project-name gd2027  # 可选：导出 Word/PDF 用，魔搭 SDK 令牌 ms-xxxx
 
 # ⚠ Pages 是把环境变量打进每一次部署的：secret 录完必须再部署一次才生效
-npx wrangler pages deploy dist --project-name doubao
+npx wrangler pages deploy dist --project-name gd2027
 ```
 
-想再多一个域名（本项目就是这么从 `doubao-5jj` 变成 `gd2027` 的）：D1 绑定读的是 `wrangler.jsonc`，
-所以 `pages project create gd2027` + `pages deploy dist --project-name gd2027` 就自动接上同一个数据库，
-历史 / 设置 / 供应商 / MCP 全部共用，只有上面那三条 secret 要在新项目里重录一遍（然后同样再部署一次）。
+**多用户版的上线顺序**：上面这套跑完，页面上的注册才能用。第一个注册的手机号会把单用户版留在
+`user_id = 'owner'` 下的历史（会话 / 供应商 / MCP / 设置）整体接走，`messages` 靠 `conversation_id`
+跟着会话走，不用单独迁；之后注册的号各起各的，看不到前一个人的任何东西。
+
+想再多一个域名：D1 绑定读的是 `wrangler.jsonc`，所以 `pages project create <新名>` +
+`pages deploy dist --project-name <新名>` 就自动接上同一个数据库，历史 / 设置 / 供应商 / MCP 全部共用，
+只有上面那三条 secret 要在新项目里重录一遍（然后同样再部署一次）。
 
 本地联调：复制 `.dev.vars.example` 为 `.dev.vars` 填上口令与密钥，然后 `npm run dev`
 （`wrangler pages dev dist` 会从 `wrangler.jsonc` 读 D1 绑定，**不要**再手动传 `--d1`，
@@ -77,6 +85,7 @@ npx wrangler pages deploy dist --project-name doubao
 
 ```text
 src/index.js        路由与鉴权
+src/accounts.js     注册 / 登录：手机号 + 密码 + 访问口令，第一个号接管 owner 历史
 src/chat.js         /api/chat：SSE 事件流、工具循环、落盘
 src/mcp.js          远程 MCP 客户端（initialize / tools/list / tools/call + 工具缓存 + schema 瘦身）
 src/db.js           D1 访问层：所有查询都带 user_id 且命中索引，id 一律 bind
@@ -85,7 +94,7 @@ src/mcp-servers.js  MCP 服务 CRUD / 开关 / 连通测试
 src/conversations.js会话、消息、回退
 src/notes.js        收藏到笔记（找带 add_note 工具的 MCP 去调）
 src/export.js       导出 Word/PDF（调 markdown 转文档的 MCP，再带令牌把文件取回来）
-src/settings.js     应用级设置（目前只有名称）
+src/settings.js     用户设置（名称 / 配色 / 深浅色 / 联网 / 朗读 / 音色 / 两个开关），一行 JSON 存 D1
 src/auth.js         口令校验与 HMAC token
 src/sanitize.js     出站地址校验（挡内网 / 元数据地址）
 public/index.html   整个前端
@@ -119,7 +128,11 @@ public/index.html   整个前端
 - **`<span>` 里的省略号永远不触发**：文件气泡的名字和副行都是 span，默认 `display:inline`，`overflow/text-overflow` 根本不生效，两行还会挤成一行（`clientWidth` 量出来是 0）。必须显式 `display:block`，父级 `.fmeta` 再配 `min-width:0`，否则 flex 子项不肯收缩
 - **后台校准会重绘整个消息列表**：`setMsgs` → `paintFiles` 把「生成中」的文件气泡一起抹掉，转换完成时 `el.replaceWith()` 落在游离节点上，用户就再也点不到下载。用一个 `pendingFiles` 集合把在途的那条豁免掉
 - **异步回来的落库不能用 `S.convId`**：转换十几秒，中间完全可能切到别的会话；发起那一刻就得把会话 id 存进局部 `cid`，否则文件会挂到新会话名下、按 `message_id` 找不到锚点
-- **登录页读不到设置里的应用名**：名字存在 D1 的 `app_settings`，而登录页要在拿到 token 之前渲染。只能靠 `localStorage.db.name` 这份本机缓存（`applyName()` 顺手写一次），换台新设备首访仍会先显示默认的 `doubao`；要彻底解决就得开一个不鉴权的品牌接口，那是把名字透露给匿名访问者，得先问过用户
+- **登录页读不到设置里的应用名**：名字存在 D1 的 `app_settings`，而登录页要在拿到 token 之前渲染。只能靠 `localStorage.db.name` 这份本机缓存（`applyName()` 顺手写一次），换台新设备首访仍会先显示默认的「狗蛋」；要彻底解决就得开一个不鉴权的品牌接口，那是把名字透露给匿名访问者，得先问过用户
+- **单用户版换多用户，老令牌要认出来**：`sub = 'owner'` 的 HMAC 令牌照样验得过签，但它名下的数据已经被第一个手机号接走了。放任它进界面，用户看到的是「历史全空」，只会以为聊天丢了——`init()` 里认出 `userId === 'owner'` 就 `signOut()` 请回登录页重登一次
+- **IndexedDB 库名带账号，换账号等于换库**：正因为前面那条坑（库名带 sub 才没串号），单用户版攒的本机历史在换手机号登录时会整个「看不见」——而这份恰恰是服务端 10 天已清掉、别处找不回的。所以第一次登录要 `adoptLegacyCache()` 把 `doubao-cache-owner` 的三个 store 搬进新库：新库非空就不搬（别盖掉更新的），只复制不删源（搬错了还能回头），`indexedDB.databases()` 能列就先确认旧库存在（`open()` 不存在的库会顺手建一个空的）
+- **整体 PUT 设置之前必须先把服务端那份读回来**：前端改动是防抖着把 8 个键一起 PUT 的，登录前的本机默认值一旦推上去就把真源盖掉了，所以 `settingsLoaded` 之前 `pushSettings()` 直接返回；服务端那边也是合并原 JSON 回写，`prunedAt` 之类才不会被抹掉（同上一条 10 天清理的坑）
+- **口令明文入库是用户点名要的取舍**：好处是 `SELECT * FROM users` 就能看清每个账号、代客改密很直接；代价是这份 D1 一旦外泄等于所有账号口令一起外泄，所以任何接口都不返回 `password` 列（`getUser()` 只 `SELECT` 需要的列），带口令的查询结果也不要贴到公开地方。想换成哈希只要改 `accounts.js` 里那一处比较
 - **`<i></i>` 光有渐变底色是个空色块**：品牌位和登录页的图标位要放名字首字才算「画出来了」。`display:grid;place-items:center` 还得配 `font-style:normal`（`<i>` 默认斜体，中文首字歪着很难看），尺寸写死 20/22px 才不会被子元素撑开
 - **文件名里不能出现 `：` `？` `／`**：整句提问当文件名又长又难认，Windows 上还是非法字符。改成让模型拟 4–12 字的短名字，`[^\p{Script=Han}\p{L}\p{N}]+/u` 把其余字符全切掉，只留汉字字母数字；转换那十几秒里前端先按「提问里最长的一段」猜一个，响应回来用 `content-disposition` 覆盖
 - **并行的那个小调用必须自己吞掉异常**：拟文件名的请求和转换请求是一起发出去的，`callTool` 一旦失败会先 `return`，`naming` 这个 Promise 就永远没人 `await`——未接住的 rejection 在 Workers 上是一条错误日志，浏览器侧却什么都看不见

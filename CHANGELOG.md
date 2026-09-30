@@ -1,5 +1,20 @@
 # 更新日志
 
+## v1.1.0 — 多用户版（2026-09-30）
+
+从单用户换成多用户：进门还是那条访问口令，但进来之后各人是各人的账号。
+
+- **注册 / 登录**：手机号 + 密码 + 访问口令，登录页一个表单两种模式（「还没有账号？注册一个」）。口令是建号门槛——`POST /api/auth/register` 先 `checkPassword` 再落库，口令错就什么都建不出来；口令本身仍是 `ACCESS_PASSWORD` secret，不入库
+- **身份换成手机号**：HMAC token 的 `sub` 从常量 `owner` 改成手机号，`user_id` 列跟着变，新增 `migrations/0005_users.sql`（`users(phone PRIMARY KEY, password, created_at)`）。历史数据、API Key、MCP 配置从此按人隔离
+- **第一个号接管旧数据**：`users` 表为空时注册，会把单用户版挂在 `user_id = 'owner'` 下的 providers / mcp_servers / conversations / app_settings 整体迁到自己名下（`messages` 靠 `conversation_id` 跟着会话走）
+- **设置全部落 D1**：应用名、配色、深浅色、联网、朗读、音色、「内容由模型生成」开关、「重新生成」开关这 8 项一起进 `app_settings` 的一行 JSON，登录后拉取并应用、改动防抖 600ms 整体 PUT；`localStorage` 降级为登录前的本机缓存。换设备登录即可还原
+- **本地历史跟着账号搬**：IndexedDB 库名带 `sub`，换手机号等于换库，所以第一次登录把 `doubao-cache-owner` 的三个 store 复制进新库——那份是服务端 10 天已清掉、别处找不回的本地独有历史
+- **老令牌请回登录**：`sub = 'owner'` 的令牌还能验签，但名下已无数据，前端认出后直接退出登录，免得显示成「历史被清空」
+- **登录页默认名改成「狗蛋」**（原来是 `doubao`）：静态 HTML、前端兜底、服务端 `DEFAULT_SETTINGS` 三处一起换
+- **入口收敛**：只用 <https://gd2027.pages.dev>；老项目 `doubao`（`doubao-5jj.pages.dev`）在新版验证后删除，避免两个地址记混
+
+这版故意没有：忘记密码 / 改密码 / 注销账号的入口，账号数量上限，以及注册接口的限流——都靠访问口令这一道门挡着。
+
 ## v1.0.0 — 单用户版（2026-09-30，稳定版）
 
 这是**单用户版**的最终状态：一个访问口令 = 一个账号，所有历史、设置、供应商、MCP 都归属同一个 `user_id = 'owner'`。多用户版从这条线之后开始。

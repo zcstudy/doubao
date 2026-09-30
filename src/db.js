@@ -270,3 +270,30 @@ export async function putSettings(db, userId, data, now) {
   `).bind(userId, data, now).run();
 }
 
+// —— users ——————————————————————————————————————
+
+export async function getUser(db, phone) {
+  return db.prepare('SELECT phone, password, created_at FROM users WHERE phone = ?').bind(phone).first();
+}
+
+export async function insertUser(db, phone, password, now) {
+  await db.prepare('INSERT INTO users (phone, password, created_at) VALUES (?, ?, ?)')
+    .bind(phone, password, now).run();
+}
+
+export async function countUsers(db) {
+  const row = await db.prepare('SELECT COUNT(*) AS n FROM users').first();
+  return row?.n ?? 0;
+}
+
+// 单用户版所有行都挂在 user_id = 'owner' 下，第一个注册的手机号把这份历史接走。
+// messages 没有 user_id 列，靠 conversation_id 跟着会话走，不用单独发语句
+export async function adoptLegacyData(db, phone, legacyId = 'owner') {
+  await db.batch([
+    db.prepare('UPDATE providers SET user_id = ? WHERE user_id = ?').bind(phone, legacyId),
+    db.prepare('UPDATE mcp_servers SET user_id = ? WHERE user_id = ?').bind(phone, legacyId),
+    db.prepare('UPDATE conversations SET user_id = ? WHERE user_id = ?').bind(phone, legacyId),
+    db.prepare('UPDATE app_settings SET user_id = ? WHERE user_id = ?').bind(phone, legacyId),
+  ]);
+}
+
